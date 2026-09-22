@@ -1,0 +1,44 @@
+[project]
+name = "comfyui-lany-nodes"
+version = "0.1.0"
+description = "Utility, common, and experimental nodes for ComfyUI."
+readme = "README.md"
+authors = [
+    { name = "Lany Atwood", email = "lany@colorized.life" }
+]
+requires-python = ">=3.13"
+# ComfyUI supplies comfy_api and runtime PyTorch.
+license = "AGPL-3.0-only"
+license-files = ["LICENSE", "COPYRIGHT"]
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9,<10",
+    "ruff>=0.16.6",
+]
+
+[tool.uv]
+python-preference = "system"
+
+[tool.uv.build-backend]
+source-include = ["__init__.py", ".python-version", "AGENTS.md", "uv.lock", "tests/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["--import-mode=importlib", "--confcutdir=tests"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.per-file-ignores]
+"./__init__.py" = ["N999"]
