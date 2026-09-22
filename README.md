@@ -22,3 +22,7 @@ with exact halfway values rounded to the nearest even integer.
 
 Copyright © 2026 Lany Atwood <lany@colorized.life>. Licensed under
 [AGPL-3.0-only](LICENSE); see [COPYRIGHT](COPYRIGHT).
+
+Context and Seed are fresh implementations for ComfyUI's V3 node API, inspired by
+rgthree's Context Big and Seed nodes in [rgthree-comfy](https://github.com/rgthree/rgthree-comfy).
+No upstream source code is incorporated; see [COPYRIGHT](COPYRIGHT) for attribution.

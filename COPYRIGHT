@@ -3,3 +3,11 @@ comfyui-lany-nodes
 Copyright (c) 2026 Lany Atwood <lany@colorized.life>
 GNU Affero General Public License, version 3 only (AGPL-3.0-only).
 See LICENSE.
+
+Upstream inspiration:
+Context and Seed are fresh implementations for ComfyUI's V3 node API,
+inspired by the Context Big and Seed nodes in rgthree-comfy by
+Regis Gaughan, III (rgthree).
+No upstream source code is incorporated.
+
+Upstream project: https://github.com/rgthree/rgthree-comfy

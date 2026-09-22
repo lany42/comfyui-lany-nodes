@@ -18,6 +18,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "nodejs-wheel>=24,<25",
     "pytest>=9,<10",
     "ruff>=0.16.6",
 ]

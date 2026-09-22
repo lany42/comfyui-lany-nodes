@@ -5,9 +5,11 @@
 
 from comfy_api.latest import ComfyExtension, io
 
+from .context import Context
 from .nodes import ScaleTo
+from .seed import Seed
 
 
 class LanyNodesExtension(ComfyExtension):
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        return [ScaleTo]
+        return [ScaleTo, Context, Seed]
