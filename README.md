@@ -11,12 +11,13 @@ git clone https://git.colorized.life/comfyui-lany-nodes.git comfyui-lany-nodes
 
 ## Nodes
 
-| Display name | Node ID | Controls, in order | Outputs |
+All nodes are available in the **Lany Nodes** category.
+
+| Display name | Node ID | Inputs / controls | Outputs |
 | --- | --- | --- | --- |
 | ScaleTo | `LanyNodes_ScaleTo` | `width`, `height`, `scale` | `target_width`, `target_height` |
-
-ScaleTo multiplies dimensions by `scale` and rounds to the nearest integers,
-with exact halfway values rounded to the nearest even integer.
+| Context | `LanyNodes_Context` | Optional `base_ctx` and the fields listed below | `CONTEXT`, followed by each field listed below |
+| Seed | `LanyNodes_Seed` | `seed`; buttons: `randomize`, `new seed`, `use last seed` | `SEED` |
 
 ## License
 

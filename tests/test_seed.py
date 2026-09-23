@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-import comfyui_lany_nodes
+import comfyui_lany_nodes.nodes
 
 
 @pytest.fixture
@@ -29,10 +29,10 @@ def seed_node():
     api.latest = latest
     with (
         patch.dict(sys.modules, {"comfy_api": api, "comfy_api.latest": latest}),
-        patch.dict(vars(comfyui_lany_nodes)),
+        patch.dict(vars(comfyui_lany_nodes.nodes)),
     ):
-        sys.modules.pop("comfyui_lany_nodes.seed", None)
-        yield import_module("comfyui_lany_nodes.seed").Seed
+        sys.modules.pop("comfyui_lany_nodes.nodes.seed", None)
+        yield import_module("comfyui_lany_nodes.nodes.seed").Seed
 
 
 def test_seed_schema(seed_node):

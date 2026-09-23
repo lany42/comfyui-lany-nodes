@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-import comfyui_lany_nodes
+import comfyui_lany_nodes.nodes
 
 
 @pytest.fixture
@@ -30,10 +30,10 @@ def scale_to():
     api.latest = latest
     with (
         patch.dict(sys.modules, {"comfy_api": api, "comfy_api.latest": latest}),
-        patch.dict(vars(comfyui_lany_nodes)),
+        patch.dict(vars(comfyui_lany_nodes.nodes)),
     ):
-        sys.modules.pop("comfyui_lany_nodes.nodes", None)
-        yield import_module("comfyui_lany_nodes.nodes").ScaleTo
+        sys.modules.pop("comfyui_lany_nodes.nodes.scaleto", None)
+        yield import_module("comfyui_lany_nodes.nodes.scaleto").ScaleTo
 
 
 def test_scale_to_schema(scale_to):

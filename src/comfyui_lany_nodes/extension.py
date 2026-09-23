@@ -5,9 +5,9 @@
 
 from comfy_api.latest import ComfyExtension, io
 
-from .context import Context
-from .nodes import ScaleTo
-from .seed import Seed
+from .nodes.context import Context
+from .nodes.scaleto import ScaleTo
+from .nodes.seed import Seed
 
 
 class LanyNodesExtension(ComfyExtension):
