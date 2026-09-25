@@ -84,10 +84,11 @@ extension = asyncio.run(module.comfy_entrypoint())
 assert isinstance(extension, latest.ComfyExtension)
 nodes = asyncio.run(extension.get_node_list())
 assert [node.__name__ for node in nodes] == [
-    "ScaleTo", "Context", "Seed", "ImageComparer",
+    "ScaleTo", "ScaleOf", "Context", "Seed", "ImageComparer",
 ]
 assert [node.define_schema().node_id for node in nodes] == [
-    "LanyNodes_ScaleTo", "LanyNodes_Context", "LanyNodes_Seed", "LanyNodes_ImageComparer",
+    "LanyNodes_ScaleTo", "LanyNodes_ScaleOf", "LanyNodes_Context",
+    "LanyNodes_Seed", "LanyNodes_ImageComparer",
 ]
 assert all(issubclass(node, latest.io.ComfyNode) for node in nodes)
 """

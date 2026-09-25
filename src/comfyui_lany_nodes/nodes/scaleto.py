@@ -22,7 +22,8 @@ class ScaleTo(io.ComfyNode):
             has_intermediate_output=True,
             description=(
                 "Multiply width and height by scale and round to the nearest integers. "
-                "Exact halfway values round to the nearest even integer."
+                "Exact halfway values round to the nearest even integer. "
+                "Also return the input scale unchanged."
             ),
             inputs=[
                 io.Int.Input("width", default=1024, min=0, max=2**53 - 1, step=1),
@@ -40,6 +41,7 @@ class ScaleTo(io.ComfyNode):
             outputs=[
                 io.Int.Output("target_width"),
                 io.Int.Output("target_height"),
+                io.Float.Output("scale"),
             ],
         )
 
@@ -54,5 +56,6 @@ class ScaleTo(io.ComfyNode):
         return io.NodeOutput(
             target_width,
             target_height,
+            scale,
             ui={"dimensions": [f"({target_width}x{target_height})"]},
         )

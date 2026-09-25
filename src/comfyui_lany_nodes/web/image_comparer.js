@@ -451,7 +451,6 @@ function createComparer(node) {
     (event) => {
       press = null;
       clickReady = false;
-      if (mode === "slider") reset();
       forward(event);
     },
     { passive: false },
