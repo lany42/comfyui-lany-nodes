@@ -17,6 +17,19 @@ uv lock --check
 uv build
 ```
 
+Use Node.js and npm for frontend formatting; `npm ci` installs the pinned
+Prettier development dependency. Update package.json and package-lock.json
+together. After changes to src/comfyui_lany_nodes/web or tests/**/*.test.mjs,
+run these commands from the repository root:
+
+```sh
+npm run format
+npm run format:check
+```
+
+`format` writes formatting changes; `format:check` checks without writing.
+Both commands cover the web files and their JavaScript tests.
+
 Keep implementation in src/comfyui_lany_nodes and the root loader for
 clone/ZIP loading. Keep package imports usable without ComfyUI by deferring
 host imports to the extension entry point. Use ComfyUI's V3 API:

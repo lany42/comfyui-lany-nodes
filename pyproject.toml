@@ -26,7 +26,17 @@ dev = [
 python-preference = "system"
 
 [tool.uv.build-backend]
-source-include = ["__init__.py", ".python-version", "AGENTS.md", "uv.lock", "tests/**"]
+source-include = [
+    "__init__.py",
+    ".python-version",
+    "AGENTS.md",
+    "uv.lock",
+    "tests/**",
+    "package.json",
+    "package-lock.json",
+    ".prettierrc.json",
+    ".prettierignore",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

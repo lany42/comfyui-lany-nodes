@@ -1,0 +1,6 @@
+.venv/
+build/
+dist/
+wheels/
+.pytest_cache/
+.ruff_cache/

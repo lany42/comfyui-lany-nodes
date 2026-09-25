@@ -1,0 +1,12 @@
+{
+  "name": "comfyui-lany-nodes",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "format": "prettier --write src/comfyui_lany_nodes/web \"tests/**/*.test.mjs\"",
+    "format:check": "prettier --check src/comfyui_lany_nodes/web \"tests/**/*.test.mjs\""
+  },
+  "devDependencies": {
+    "prettier": "3.9.9"
+  }
+}

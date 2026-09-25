@@ -11,14 +11,15 @@ from pathlib import Path
 import pytest
 
 
-def test_seed_frontend(tmp_path):
+@pytest.mark.parametrize("suite_name", ["seed", "image_comparer"])
+def test_frontend(tmp_path, suite_name):
     node = shutil.which("node")
     if node is None:
         message = "to run this project's frontend tests, please install node."
         warnings.warn(message, pytest.PytestWarning, stacklevel=1)
         pytest.skip(message)
 
-    suite = Path(__file__).with_name("seed.test.mjs")
+    suite = Path(__file__).with_name(f"{suite_name}.test.mjs")
     result = subprocess.run(
         [
             node,

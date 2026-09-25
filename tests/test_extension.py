@@ -42,15 +42,17 @@ assert web_directory == expected_package.resolve() / "web"
 assert (web_directory / "scale_to.js").is_file()
 assert "LanyNodes.ScaleToDimensions" in (web_directory / "scale_to.js").read_text()
 assert "LanyNodes.Seed" in (web_directory / "seed.js").read_text()
+assert "LanyNodes.ImageComparer" in (web_directory / "image_comparer.js").read_text()
 
 def socket_type(io_type):
     def socket(id, **options):
         return SimpleNamespace(id=id, io_type=io_type, **options)
-    return SimpleNamespace(io_type=io_type, Input=socket, Output=socket)
+    return SimpleNamespace(io_type=io_type, Input=socket, Output=socket, Type=object)
 
 api = ModuleType("comfy_api")
 latest = ModuleType("comfy_api.latest")
 latest.ComfyExtension = type("ComfyExtension", (), {})
+latest.ui = SimpleNamespace()
 latest.io = SimpleNamespace(
     ComfyNode=type("ComfyNode", (), {}),
     Schema=SimpleNamespace,
@@ -81,9 +83,11 @@ sys.modules["comfy_api.latest"] = latest
 extension = asyncio.run(module.comfy_entrypoint())
 assert isinstance(extension, latest.ComfyExtension)
 nodes = asyncio.run(extension.get_node_list())
-assert [node.__name__ for node in nodes] == ["ScaleTo", "Context", "Seed"]
+assert [node.__name__ for node in nodes] == [
+    "ScaleTo", "Context", "Seed", "ImageComparer",
+]
 assert [node.define_schema().node_id for node in nodes] == [
-    "LanyNodes_ScaleTo", "LanyNodes_Context", "LanyNodes_Seed",
+    "LanyNodes_ScaleTo", "LanyNodes_Context", "LanyNodes_Seed", "LanyNodes_ImageComparer",
 ]
 assert all(issubclass(node, latest.io.ComfyNode) for node in nodes)
 """
