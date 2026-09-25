@@ -37,6 +37,7 @@ function validImages(images) {
 
 function createComparer(node) {
   const root = element("div", {
+    position: "relative",
     display: "flex",
     flexDirection: "column",
     gap: "4px",
@@ -141,8 +142,16 @@ function createComparer(node) {
     "Run the node to compare images.",
   );
   status.setAttribute("role", "status");
+  // Empty status text takes no space; download errors overlay the image.
   const downloadStatus = element("div", {
-    flex: "0 0 16px",
+    position: "absolute",
+    bottom: "0",
+    left: "0",
+    right: "0",
+    padding: "0 4px",
+    lineHeight: "20px",
+    background,
+    pointerEvents: "none",
     overflow: "hidden",
     whiteSpace: "nowrap",
     textOverflow: "ellipsis",
@@ -516,6 +525,7 @@ function createComparer(node) {
     {
       serialize: false,
       selectOn: [],
+      margin: 0,
       getMinHeight: () => 180,
       getHeight: () => "100%",
       // Host draws already caused by resize/zoom refresh the divider geometry.
