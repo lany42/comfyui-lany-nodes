@@ -17,9 +17,15 @@ All nodes are available in the **Lany Nodes** category.
 
 | Display name | Node ID | Inputs / controls | Outputs |
 | --- | --- | --- | --- |
-| ScaleTo | `LanyNodes_ScaleTo` | `width`, `height`, `scale` | `target_width`, `target_height` |
-| Context | `LanyNodes_Context` | Optional `base_ctx` and the fields listed below | `CONTEXT`, followed by each field listed below |
+| ScaleTo | `LanyNodes_ScaleTo` | `width`, `height`, `scale` | `target_width`, `target_height`, `scale` (unchanged) |
+| ScaleOf | `LanyNodes_ScaleOf` | `target`, `source` (nonzero) | `scale` (`target / source`, without rounding) |
+| Context | `LanyNodes_Context` | Optional `base_ctx` and optional context fields listed below | `CONTEXT`, followed by each context field in uppercase, in the order listed below |
 | Seed | `LanyNodes_Seed` | `seed`; buttons: `randomize`, `new seed`, `use last seed` | `SEED` |
+| ImageComparer | `LanyNodes_ImageComparer` | `image_a`, `image_b` (nonempty image batches of equal length); `Slider` / `Click` modes, previous / next pair, right-click PNG download | No output sockets; browser image comparison |
+
+Context fields, in order: `model`, `clip`, `vae`, `positive`, `negative`,
+`latent`, `images`, `seed`, `width`, `height`, `prompt_pos`, `prompt_neg`,
+`model_names`, `controlnet`, `upscale_model`, `any_1`, `any_2`, `any_3`, `any_4`.
 
 ## License
 

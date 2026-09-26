@@ -13,7 +13,7 @@ wheels = [
 
 [[package]]
 name = "comfyui-lany-nodes"
-version = "1.0.1"
+version = "1.1.0"
 source = { editable = "." }
 
 [package.dev-dependencies]
