@@ -1,5 +1,7 @@
 # ComfyUI Lany Nodes
 
+The canonical home of this repository is at https://git.colorized.life/comfyui-lany-nodes/
+
 Utility, common, and experimental nodes for ComfyUI. Requires Python 3.13+
 and ComfyUI's V3 node API.
 

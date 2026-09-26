@@ -1,3 +1,5 @@
+If a push is requested, only push to `origin`. Never push to a mirror remote unless the user explicitly overrides this rule.
+
 Do NOT update the README unless explicitly requested.
 Do NOT add or update documentation in docs/ unless explicitly requested.
 
