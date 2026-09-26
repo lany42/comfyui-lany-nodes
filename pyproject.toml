@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-lany-nodes"
-version = "0.1.0"
+version = "1.0.0"
 description = "Utility, common, and experimental nodes for ComfyUI."
 readme = "README.md"
 authors = [
