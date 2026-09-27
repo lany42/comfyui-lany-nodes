@@ -658,6 +658,47 @@ def test_filename_interpolation_and_directories(host, monkeypatch):
     assert "Model: model" in read_parameters(saved)
 
 
+@pytest.mark.parametrize(("width", "height"), [(0, 0), (1024, 768)])
+@pytest.mark.parametrize(
+    ("path", "time_format", "directory"),
+    [
+        ("%date/sdxl/png", "%H-%M", "2026-09-26/sdxl/png"),
+        (r"%date\sdxl\png", "%H-%M", "2026-09-26/sdxl/png"),
+        (
+            "%date/%time/%time_format<%H%M>/%model/%seed_%steps_%widthx%height",
+            "%H-%M",
+            "2026-09-26/12-34/1234/base.v2/42_20_{width}x{height}",
+        ),
+        ("%time_format<%Y/%m/%d>/海 images", "%H-%M", "2026/09/26/海 images"),
+        ("%time/sdxl/png", "%Y/%m/%d", "2026/09/26/sdxl/png"),
+    ],
+)
+def test_path_interpolation(
+    host, monkeypatch, width, height, path, time_format, directory
+):
+    now = datetime(2026, 9, 26, 12, 34, 56).astimezone()
+    monkeypatch.setattr(
+        sys.modules[host.node.__module__],
+        "datetime",
+        Mock(now=Mock(side_effect=[now, now.replace(day=27)])),
+    )
+    host.add_model("checkpoints", "base.v2.safetensors")
+    host.run(
+        path=path,
+        filename="%date_%time_format<%H%M%S>",
+        time_format=time_format,
+        models="checkpoints/base.v2.safetensors",
+        seed=42,
+        steps=20,
+        width=width,
+        height=height,
+    )
+
+    directory = directory.format(width=width or 5, height=height or 3)
+    saved = host.root / directory / "2026-09-26_123456.png"
+    assert "Model: base.v2" in read_parameters(saved)
+
+
 @pytest.mark.parametrize(
     ("path", "directory"),
     [
@@ -777,13 +818,37 @@ def test_invalid_path_fails_before_hashing(host, monkeypatch, path):
     assert not host.root.exists()
 
 
-def test_output_paths_do_not_follow_symlinks_outside_output(host, tmp_path):
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"path": "%time", "time_format": "../escape"},
+        {"path": "%time", "time_format": "/tmp/escape"},
+        {"path": "%time_format<.>/images"},
+        {"path": "%time_format<..>/escape"},
+        {"path": "nested/%time_format<../escape>"},
+        {"path": "%time_format<C:/escape>"},
+        {"path": "nested/%time_format<C:escape>"},
+        {"path": r"%time_format<..\escape>"},
+        {"path": r"%time_format<\\server\share>"},
+    ],
+)
+def test_invalid_expanded_path_fails_before_hashing(host, monkeypatch, kwargs):
+    hash_models = Mock()
+    monkeypatch.setattr(saver, "model_hashes", hash_models)
+    with pytest.raises(ValueError, match="path.*relative markers or anchors"):
+        host.run(**kwargs)
+    hash_models.assert_not_called()
+    assert not host.root.exists()
+
+
+@pytest.mark.parametrize("path", ["link", "%time_format<link>"])
+def test_output_paths_do_not_follow_symlinks_outside_output(host, tmp_path, path):
     host.root.mkdir()
     outside = tmp_path / "elsewhere"
     outside.mkdir()
     (host.root / "link").symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match="outside"):
-        host.run(path="link")
+        host.run(path=path)
     (host.root / "image").symlink_to(outside / "stem")
     with pytest.raises(ValueError, match="outside"):
         host.run()

@@ -11,7 +11,7 @@ from comfy_api.latest import io
 
 from .. import image_saver as saver
 
-FILENAME_TOKENS = re.compile(
+REPLACEMENT_TOKENS = re.compile(
     r"%time_format<([^>]*)>|%(model|date|time(?!_format)|seed|steps|width|height)"
 )
 
@@ -75,35 +75,16 @@ def _validate_images(images: io.Image.Type) -> io.Image.Type:
     return images
 
 
-def _validate_filename(
-    filename: str,
+def _expand_tokens(
+    value: str,
+    name: str,
     time_format: str,
     *,
-    model: str,
-    seed: int,
-    steps: int,
-    width: int,
-    height: int,
+    values: dict[str, str],
     now: datetime,
 ) -> str:
-    _validate_string(filename, "filename")
+    _validate_string(value, name)
     _validate_string(time_format, "time_format")
-
-    literals = FILENAME_TOKENS.sub("", filename)
-    if not filename or (literals and not saver.FILENAME_CHARACTERS.fullmatch(literals)):
-        raise ValueError(
-            "filename must contain only ASCII letters, digits, underscores, hyphens, "
-            "periods, or supported replacement tokens, without a path."
-        )
-
-    values = {
-        "date": now.strftime("%Y-%m-%d"),
-        "model": model,
-        "seed": str(seed),
-        "steps": str(steps),
-        "width": str(width),
-        "height": str(height),
-    }
 
     def replace(match):
         if match.group(1) is not None:
@@ -112,17 +93,24 @@ def _validate_filename(
         return now.strftime(time_format) if token == "time" else values[token]
 
     try:
-        expanded = FILENAME_TOKENS.sub(replace, filename)
+        return REPLACEMENT_TOKENS.sub(replace, value)
     except (ValueError, OverflowError) as error:
-        raise ValueError("filename contains an invalid time format.") from error
+        raise ValueError(f"{name} contains an invalid time format.") from error
+
+
+def _validate_filename(filename: str, expanded: str) -> None:
+    literals = REPLACEMENT_TOKENS.sub("", filename)
+    if not filename or (literals and not saver.FILENAME_CHARACTERS.fullmatch(literals)):
+        raise ValueError(
+            "filename must contain only ASCII letters, digits, underscores, hyphens, "
+            "periods, or supported replacement tokens, without a path."
+        )
 
     if expanded in {".", ".."} or not saver.FILENAME_CHARACTERS.fullmatch(expanded):
         raise ValueError(
             "expanded filename must be nonempty and contain only ASCII letters, "
             "digits, underscores, hyphens, or periods; . and .. are not allowed."
         )
-
-    return expanded
 
 
 def _validate_path(path: str, root: Path, filename: str) -> Path:
@@ -202,6 +190,9 @@ class ImageSaverMini(io.ComfyNode):
                     tooltip=(
                         "Folder inside ComfyUI's output directory. "
                         "Leave empty to use the output directory. "
+                        "Supports %date, %time, %time_format<format>, %model, "
+                        "%seed, %steps, %width, and %height, as in filename. "
+                        "For example: %date/sdxl/png. "
                         "No absolute paths or . or .. path components."
                     ),
                 ),
@@ -339,18 +330,28 @@ class ImageSaverMini(io.ComfyNode):
 
         width, height = width or images.shape[2], height or images.shape[1]
         model = saver.model_basename(primary)
-        expanded_filename = _validate_filename(
+        now = datetime.now().astimezone()
+        values = {
+            "date": now.strftime("%Y-%m-%d"),
+            "model": model,
+            "seed": str(seed),
+            "steps": str(steps),
+            "width": str(width),
+            "height": str(height),
+        }
+        expanded_filename = _expand_tokens(
             filename,
+            "filename",
             time_format,
-            model=model,
-            seed=seed,
-            steps=steps,
-            width=width,
-            height=height,
-            now=datetime.now().astimezone(),
+            values=values,
+            now=now,
+        )
+        _validate_filename(filename, expanded_filename)
+        expanded_path = _expand_tokens(
+            path, "path", time_format, values=values, now=now
         )
         root = Path(folder_paths.get_output_directory()).resolve()
-        file_path = _validate_path(path, root, expanded_filename)
+        file_path = _validate_path(expanded_path, root, expanded_filename)
 
         hashes = saver.model_hashes(model_names, extra_hashes, folder_paths)
         parameters = saver.GenerationParameters(
