@@ -16,6 +16,8 @@ concurrency:
 jobs:
   mirror:
     if: ${{ github.repository == 'lany42/comfyui-lany-nodes' && vars.MIRROR_ENABLED == 'true' }}
+    permissions:
+      actions: write
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -115,3 +117,10 @@ jobs:
           git ls-remote --refs --heads --tags "$MIRROR_READ_URL" | sort > "$RUNNER_TEMP/verified.refs"
           cmp "$RUNNER_TEMP/canonical.refs" "$RUNNER_TEMP/verified.refs"
           echo 'Verified identical canonical and mirrored branch/tag objects.'
+
+      - name: Dispatch registry publishing after synchronization
+        if: steps.prepare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run publish.yml --repo "$GH_REPO" --ref main

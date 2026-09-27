@@ -1,37 +1,52 @@
 name: Publish to Comfy registry
 
-# Mirrored tag pushes use REPO_MIRROR and can trigger this workflow.
+# The mirror dispatches this workflow on main after a verified synchronization.
+# Use the tag input to select release code while retaining main's current checks.
 # Leave REGISTRY_PUBLISH_ENABLED unset/false until ready to publish.
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
+    inputs:
+      tag:
+        description: "Tag to publish; empty selects the highest vX.Y.Z[-rcN] tag"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: registry-${{ github.ref }}
+  group: registry-publish
   cancel-in-progress: false
 
 jobs:
   publish-node:
     name: Publish Custom Node to registry
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.created && !github.event.deleted && !github.event.forced)
-    runs-on: ubuntu-latest
+      github.ref == 'refs/heads/main' &&
+      vars.REGISTRY_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Check out code
+      - name: Check out publishing checks and all tags
         uses: actions/checkout@v7
         with:
+          path: workflow
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Compare candidate with the Comfy registry
+        id: candidate
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: python3 workflow/.github/scripts/registry_publish.py --repo workflow --tag "$REQUESTED_TAG"
+      - name: Check out the selected release commit
+        if: steps.candidate.outputs.publish == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.candidate.outputs.commit }}
           persist-credentials: false
       - name: Publish Custom Node
-        if: >-
-          vars.REGISTRY_PUBLISH_ENABLED == 'true' &&
-          startsWith(github.ref, 'refs/tags/v')
+        if: steps.candidate.outputs.publish == 'true'
         uses: Comfy-Org/publish-node-action@main
         with:
           skip_checkout: 'true'
