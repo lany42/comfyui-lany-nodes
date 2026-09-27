@@ -11,3 +11,20 @@ Regis Gaughan, III (rgthree).
 No upstream source code is incorporated.
 
 Upstream project: https://github.com/rgthree/rgthree-comfy
+
+ImageSaverMini is a fresh implementation for ComfyUI's V3 node API,
+inspired by ComfyUI-Image-Saver by alexopus, forked from
+comfy-image-saver by Girish Gopaul (giriss), licensed under MIT.
+Its filename conventions and generation metadata formats informed this
+implementation. No upstream source code is incorporated.
+
+Upstream projects:
+https://github.com/alexopus/ComfyUI-Image-Saver
+https://github.com/giriss/comfy-image-saver
+
+Test-only upstream source:
+tests/fixtures/comfyui_png.mjs contains the ComfyUI frontend PNG decoder
+from Comfy-Org/ComfyUI_frontend, revision
+f288d755b488f8bf6609100ee3e8c8b507d88630, with TypeScript types erased.
+It is licensed under GPL-3.0-only; its license is included at
+tests/fixtures/LICENSE.ComfyUI_frontend.

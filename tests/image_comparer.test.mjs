@@ -11,6 +11,10 @@ const source = await readFile(
   new URL("../src/comfyui_lany_nodes/web/image_comparer.js", import.meta.url),
   "utf8",
 );
+const buttonSource = await readFile(
+  new URL("../src/comfyui_lany_nodes/web/buttons.js", import.meta.url),
+  "utf8",
+);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 function deferred() {
   let resolve, reject;
@@ -300,6 +304,9 @@ async function harness(properties = {}) {
   });
   const module = new vm.SourceTextModule(source, { context });
   await module.link((specifier) => {
+    if (specifier === "./buttons.js") {
+      return new vm.SourceTextModule(buttonSource, { context });
+    }
     const name = specifier.endsWith("app.js") ? "app" : "api";
     return new vm.SyntheticModule(
       [name],

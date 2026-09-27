@@ -10,7 +10,8 @@ requires-python = ">=3.13"
 # ComfyUI supplies comfy_api and runtime PyTorch.
 license = "AGPL-3.0-only"
 license-files = ["LICENSE", "COPYRIGHT"]
-dependencies = []
+# Mirror these direct runtime dependencies in requirements.txt by hand.
+dependencies = ["numpy>=1.25.0", "Pillow"]
 
 [project.urls]
 Repository = "https://github.com/lany42/comfyui-lany-nodes"
@@ -28,14 +29,24 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9,<10",
     "ruff>=0.16.6",
+    "torch>=2.6",
 ]
 
 [tool.uv]
 python-preference = "system"
 
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.uv.build-backend]
 source-include = [
     "__init__.py",
+    "requirements.txt",
     ".python-version",
     "AGENTS.md",
     "uv.lock",

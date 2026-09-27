@@ -1,0 +1,4 @@
+# Hand-maintained direct runtime dependencies; mirror [project].dependencies.
+# Do not generate this file from uv.lock or uv export.
+numpy>=1.25.0
+Pillow

@@ -35,3 +35,9 @@ Copyright © 2026 Lany Atwood <lany@colorized.life>. Licensed under
 Context and Seed are fresh implementations for ComfyUI's V3 node API, inspired by
 rgthree's Context Big and Seed nodes in [rgthree-comfy](https://github.com/rgthree/rgthree-comfy).
 No upstream source code is incorporated; see [COPYRIGHT](COPYRIGHT) for attribution.
+
+ImageSaverMini is a fresh V3 implementation inspired by
+[ComfyUI-Image-Saver](https://github.com/alexopus/ComfyUI-Image-Saver) by alexopus,
+forked from [comfy-image-saver](https://github.com/giriss/comfy-image-saver) by
+Girish Gopaul (giriss). It follows upstream filename and metadata conventions
+without incorporating upstream source code; see [COPYRIGHT](COPYRIGHT).

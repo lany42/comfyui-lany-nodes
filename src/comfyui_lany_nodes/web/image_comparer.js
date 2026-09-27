@@ -3,6 +3,7 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { button, setPressed } from "./buttons.js";
 
 const NODE_ID = "LanyNodes_ImageComparer";
 const states = new WeakMap();
@@ -56,25 +57,6 @@ function createComparer(node) {
     gap: "4px",
     flex: "0 0 28px",
   });
-  const button = (label, title) => {
-    const item = element(
-      "button",
-      {
-        font: "inherit",
-        padding: "2px 6px",
-        cursor: "pointer",
-        color: "inherit",
-        background: "var(--comfy-input-bg, #333)",
-        border: "1px solid var(--border-color, #666)",
-        borderRadius: "3px",
-      },
-      label,
-    );
-    item.type = "button";
-    item.title = title;
-    item.setAttribute("aria-label", title);
-    return item;
-  };
   const sliderButton = button("Slider", "Compare with the pointer");
   const clickButton = button("Click", "Click to switch images");
   const navigation = element("div", {
@@ -207,10 +189,7 @@ function createComparer(node) {
       [sliderButton, mode === "slider"],
       [clickButton, mode === "click"],
     ]) {
-      item.setAttribute("aria-pressed", String(active));
-      item.style.borderColor = active
-        ? "var(--input-text, #ddd)"
-        : "var(--border-color, #666)";
+      setPressed(item, active);
     }
     viewport.title =
       mode === "slider"

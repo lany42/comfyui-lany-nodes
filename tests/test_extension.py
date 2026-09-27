@@ -31,6 +31,7 @@ else:
     spec.loader.exec_module(module)
 
 assert "comfy_api" not in sys.modules
+assert "folder_paths" not in sys.modules
 web_directory = Path(module.WEB_DIRECTORY)
 assert web_directory.is_absolute()
 expected_package = (
@@ -43,6 +44,8 @@ assert (web_directory / "scale_to.js").is_file()
 assert "LanyNodes.ScaleToDimensions" in (web_directory / "scale_to.js").read_text()
 assert "LanyNodes.Seed" in (web_directory / "seed.js").read_text()
 assert "LanyNodes.ImageComparer" in (web_directory / "image_comparer.js").read_text()
+assert "LanyNodes.ImageSaverMini" in (web_directory / "image_saver_mini.js").read_text()
+assert (web_directory / "buttons.js").is_file()
 
 def socket_type(io_type):
     def socket(id, **options):
@@ -58,6 +61,7 @@ latest.io = SimpleNamespace(
     Schema=SimpleNamespace,
     NodeOutput=SimpleNamespace,
     Custom=socket_type,
+    Hidden=SimpleNamespace(prompt="PROMPT", extra_pnginfo="EXTRA_PNGINFO"),
     **{
         name: socket_type(io_type)
         for name, io_type in (
@@ -70,6 +74,9 @@ latest.io = SimpleNamespace(
             ("Int", "INT"),
             ("Float", "FLOAT"),
             ("String", "STRING"),
+            ("MultiCombo", "COMBO"),
+            ("Combo", "COMBO"),
+            ("Boolean", "BOOLEAN"),
             ("ControlNet", "CONTROL_NET"),
             ("UpscaleModel", "UPSCALE_MODEL"),
             ("AnyType", "*"),
@@ -83,12 +90,18 @@ sys.modules["comfy_api.latest"] = latest
 extension = asyncio.run(module.comfy_entrypoint())
 assert isinstance(extension, latest.ComfyExtension)
 nodes = asyncio.run(extension.get_node_list())
+assert "folder_paths" not in sys.modules
+folder_paths = ModuleType("folder_paths")
+folder_paths.get_filename_list = lambda folder: []
+sys.modules["folder_paths"] = folder_paths
 assert [node.__name__ for node in nodes] == [
-    "ScaleTo", "ScaleOf", "Context", "Seed", "ImageComparer",
+    "ScaleTo", "ScaleOf", "Context", "Seed", "ImageComparer", "ModelNames",
+    "ImageSaverMini",
 ]
 assert [node.define_schema().node_id for node in nodes] == [
     "LanyNodes_ScaleTo", "LanyNodes_ScaleOf", "LanyNodes_Context",
-    "LanyNodes_Seed", "LanyNodes_ImageComparer",
+    "LanyNodes_Seed", "LanyNodes_ImageComparer", "LanyNodes_ModelNames",
+    "LanyNodes_ImageSaverMini",
 ]
 assert all(issubclass(node, latest.io.ComfyNode) for node in nodes)
 """

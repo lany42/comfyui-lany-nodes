@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("suite_name", ["seed", "image_comparer"])
+@pytest.mark.parametrize(
+    "suite_name", ["seed", "image_comparer", "image_saver_mini", "model_names"]
+)
 def test_frontend(tmp_path, suite_name):
     node = shutil.which("node")
     if node is None:
