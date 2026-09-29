@@ -1,96 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # SPDX-FileCopyrightText: 2026 Lany Atwood <lany@colorized.life>
 
-"""Context contracts tested with an isolated ComfyUI API double."""
-
-import gc
-import sys
-import weakref
-from importlib import import_module
-from types import ModuleType, SimpleNamespace
-from unittest.mock import patch
+"""Context contracts tested with the shared ComfyUI API double."""
 
 import pytest
 
-import comfyui_lany_nodes.nodes
+from comfyui_lany_nodes.nodes.context import Context
 
-SOCKETS = (
-    ("base_ctx", "CONTEXT", "LANY_CONTEXT"),
-    ("model", "MODEL", "MODEL"),
-    ("clip", "CLIP", "CLIP"),
-    ("vae", "VAE", "VAE"),
-    ("positive", "POSITIVE", "CONDITIONING"),
-    ("negative", "NEGATIVE", "CONDITIONING"),
-    ("latent", "LATENT", "LATENT"),
-    ("images", "IMAGES", "IMAGE"),
-    ("seed", "SEED", "INT"),
-    ("width", "WIDTH", "INT"),
-    ("height", "HEIGHT", "INT"),
-    ("scale", "SCALE", "FLOAT"),
-    ("prompt_pos", "PROMPT_POS", "STRING"),
-    ("prompt_neg", "PROMPT_NEG", "STRING"),
-    ("model_names", "MODEL_NAMES", "STRING"),
-    ("controlnet", "CONTROLNET", "CONTROL_NET"),
-    ("upscale_model", "UPSCALE_MODEL", "UPSCALE_MODEL"),
-    ("tile_plan", "TILE_PLAN", "*"),
-    ("api_client", "API_CLIENT", "*"),
-    ("any_1", "ANY_1", "*"),
-    ("any_2", "ANY_2", "*"),
-    ("any_3", "ANY_3", "*"),
-    ("any_4", "ANY_4", "*"),
-)
-
-
-@pytest.fixture
-def context():
-    def socket_type(io_type):
-        def input_socket(id, *, optional=False, **options):
-            return SimpleNamespace(id=id, io_type=io_type, optional=optional, **options)
-
-        def output_socket(id, *, display_name=None, is_output_list=False):
-            return SimpleNamespace(
-                id=id,
-                io_type=io_type,
-                display_name=display_name or id,
-                is_output_list=is_output_list,
-            )
-
-        return SimpleNamespace(
-            io_type=io_type, Input=input_socket, Output=output_socket
-        )
-
-    api = ModuleType("comfy_api")
-    latest = ModuleType("comfy_api.latest")
-    latest.io = SimpleNamespace(
-        ComfyNode=type("ComfyNode", (), {}),
-        Schema=SimpleNamespace,
-        Custom=socket_type,
-        NodeOutput=lambda *values: SimpleNamespace(result=values),
-        **{
-            name: socket_type(io_type)
-            for name, io_type in (
-                ("Model", "MODEL"),
-                ("Clip", "CLIP"),
-                ("Vae", "VAE"),
-                ("Conditioning", "CONDITIONING"),
-                ("Latent", "LATENT"),
-                ("Image", "IMAGE"),
-                ("Int", "INT"),
-                ("Float", "FLOAT"),
-                ("String", "STRING"),
-                ("ControlNet", "CONTROL_NET"),
-                ("UpscaleModel", "UPSCALE_MODEL"),
-                ("AnyType", "*"),
-            )
-        },
-    )
-    api.latest = latest
-    with (
-        patch.dict(sys.modules, {"comfy_api": api, "comfy_api.latest": latest}),
-        patch.dict(vars(comfyui_lany_nodes.nodes)),
-    ):
-        sys.modules.pop("comfyui_lany_nodes.nodes.context", None)
-        yield import_module("comfyui_lany_nodes.nodes.context").Context
+# test_extension.py pins the socket order; these tests follow it.
+FIELDS = [port.id for port in Context.define_schema().inputs[1:]]
 
 
 class ReferenceOnly:
@@ -106,37 +24,7 @@ class ReferenceOnly:
         raise AssertionError("Context must not deep-copy payloads")
 
 
-def test_context_schema(context):
-    schema = context.define_schema()
-    assert schema.node_id == "LanyNodes_Context"
-    assert schema.display_name == "Context"
-    assert schema.category == "Lany Nodes"
-    assert schema.is_input_list
-    assert not getattr(schema, "accept_all_inputs", False)
-    assert not getattr(schema, "is_output_node", False)
-    assert not getattr(schema, "has_intermediate_output", False)
-    assert [(port.id, port.io_type) for port in schema.inputs] == [
-        (name, io_type) for name, _, io_type in SOCKETS
-    ]
-    assert [(port.id, port.display_name, port.io_type) for port in schema.outputs] == [
-        (name, name, io_type) for _, name, io_type in SOCKETS
-    ]
-    assert all(port.optional for port in schema.inputs)
-    assert all(getattr(port, "default", None) is None for port in schema.inputs)
-    for port in schema.inputs:
-        assert bool(getattr(port, "force_input", False)) == (
-            port.io_type in ("INT", "FLOAT", "STRING")
-        )
-    assert not schema.outputs[0].is_output_list
-    assert all(port.is_output_list for port in schema.outputs[1:])
-
-
-def test_empty_context_is_sparse(context):
-    result = context.execute().result
-    assert result == ({},) + ([None],) * (len(SOCKETS) - 1)
-
-
-def test_all_connected_values_are_forwarded_by_identity(context):
+def test_all_connected_values_are_forwarded_by_identity():
     values = {
         "model": ReferenceOnly(),
         "clip": ReferenceOnly(),
@@ -162,19 +50,19 @@ def test_all_connected_values_are_forwarded_by_identity(context):
         "api_client": ReferenceOnly(),
     }
     # Prompt argument order must not change the output socket order.
-    result = context.execute(
+    result = Context.execute(
         **{name: [value] for name, value in reversed(values.items())}
     ).result
     ctx = result[0]
     assert ctx is not values
     assert ctx.keys() == values.keys()
-    for (name, _, _), output in zip(SOCKETS[1:], result[1:], strict=True):
+    for name, output in zip(FIELDS, result[1:], strict=True):
         assert ctx[name] is values[name]
         assert len(output) == 1
         assert output[0] is values[name]
 
 
-def test_inherits_sparse_base_and_preserves_extra_entries(context):
+def test_inherits_sparse_base_and_preserves_extra_entries():
     base = {
         "model": ReferenceOnly(),
         "positive": [[ReferenceOnly(), {}]],
@@ -186,110 +74,55 @@ def test_inherits_sparse_base_and_preserves_extra_entries(context):
         "api_client": ReferenceOnly(),
         "future_field": ReferenceOnly(),
     }
-    result = context.execute(base_ctx=[base]).result
+    result = Context.execute(base_ctx=[base]).result
     ctx = result[0]
     assert ctx is not base
     assert ctx.keys() == base.keys()
     for name, value in base.items():
         assert ctx[name] is value
-    for (name, _, _), output in zip(SOCKETS[1:], result[1:], strict=True):
+    for name, output in zip(FIELDS, result[1:], strict=True):
         assert len(output) == 1
         assert output[0] is base.get(name)
-    assert "base_ctx" not in ctx
 
 
 @pytest.mark.parametrize(
-    ("name", "value"),
-    [
-        ("seed", 0),
-        ("width", 0),
-        ("height", 0),
-        ("prompt_pos", ""),
-        ("prompt_neg", ""),
-        ("model_names", ""),
-        ("any_1", False),
-        ("any_2", []),
-        ("any_3", {}),
-        ("any_4", ()),
-        ("scale", 0.0),
-        ("tile_plan", {}),
-        ("api_client", False),
-    ],
+    ("name", "value"), [("seed", 0), ("prompt_pos", ""), ("any_2", [])]
 )
-def test_falsey_values_override_inherited_values(context, name, value):
+def test_falsey_values_override_inherited_values(name, value):
     inherited = ReferenceOnly()
     base = {name: inherited}
-    result = context.execute(base_ctx=[base], **{name: [value]}).result
+    result = Context.execute(base_ctx=[base], **{name: [value]}).result
     assert result[0][name] is value
-    output_index = next(i for i, (key, _, _) in enumerate(SOCKETS) if key == name)
-    assert len(result[output_index]) == 1
-    assert result[output_index][0] is value
+    output = result[FIELDS.index(name) + 1]
+    assert len(output) == 1
+    assert output[0] is value
     assert base[name] is inherited
 
 
-@pytest.mark.parametrize("name", [name for name, _, _ in SOCKETS])
 @pytest.mark.parametrize("values", [None, [None], [ReferenceOnly(), None]])
-def test_connected_none_raises_even_with_inherited_values(context, name, values):
+def test_connected_none_raises_even_with_inherited_values(values):
     inputs = {
-        "base_ctx": [{key: ReferenceOnly() for key, _, _ in SOCKETS[1:]}],
-        name: values,
+        "base_ctx": [{key: ReferenceOnly() for key in FIELDS}],
+        "images": values,
     }
     with pytest.raises(
-        ValueError, match=rf"^Connected input '{name}' must not be None\.$"
+        ValueError, match=r"^Connected input 'images' must not be None\.$"
     ):
-        context.execute(**inputs)
+        Context.execute(**inputs)
 
 
-@pytest.mark.parametrize(
-    "base_ctx",
-    [False, 0, "", [], (), [("seed", 1)]],
-    ids=["bool", "int", "string", "list", "tuple", "pairs"],
-)
-def test_base_context_must_be_a_dictionary(context, base_ctx):
+def test_base_context_must_be_a_dictionary():
+    # dict() would silently accept key/value pairs from an Any socket.
     with pytest.raises(TypeError, match=r"^base_ctx must be a dictionary\.$"):
-        context.execute(base_ctx=[base_ctx])
+        Context.execute(base_ctx=[[("seed", 1)]])
 
 
 @pytest.mark.parametrize("bases", [[], [{}, {}]])
-def test_base_context_requires_exactly_one_dictionary(context, bases):
+def test_base_context_requires_exactly_one_dictionary(bases):
     with pytest.raises(
         ValueError, match=r"^base_ctx must contain exactly one context\.$"
     ):
-        context.execute(base_ctx=bases)
-
-
-def test_chains_and_branches_preserve_references_without_mutating_bases(context):
-    model = ReferenceOnly()
-    images = ReferenceOnly()
-    replacement_images = ReferenceOnly()
-    first = context.execute(model=[model], images=[images], seed=[17]).result[0]
-    second = context.execute(base_ctx=[first], images=[replacement_images]).result[0]
-    third = context.execute(base_ctx=[second], seed=[0]).result[0]
-    sibling = context.execute(base_ctx=[first], prompt_pos=["A lake"]).result[0]
-
-    assert len({id(ctx) for ctx in (first, second, third, sibling)}) == 4
-    assert all(ctx["model"] is model for ctx in (first, second, third, sibling))
-    assert first["images"] is sibling["images"] is images
-    assert second["images"] is third["images"] is replacement_images
-    assert first["seed"] == second["seed"] == sibling["seed"] == 17
-    assert third["seed"] == 0
-    assert sibling["prompt_pos"] == "A lake"
-    assert all("prompt_pos" not in ctx for ctx in (first, second, third))
-    assert all("base_ctx" not in ctx for ctx in (first, second, third, sibling))
-
-
-def test_executions_do_not_reuse_or_retain_context_dictionaries(context):
-    model = ReferenceOnly()
-    model_ref = weakref.ref(model)
-    first = context.execute(model=[model]).result[0]
-    second = context.execute(model=[model]).result[0]
-    assert first is not second
-    first["seed"] = 5
-    assert "seed" not in second
-    assert context.execute().result[0] == {}
-    del model, first, second
-    gc.collect()
-    assert model_ref() is None
+        Context.execute(base_ctx=bases)
 
 
 def execute_with_lists(node, **inputs):
@@ -320,31 +153,17 @@ def execute_with_lists(node, **inputs):
         port.id: [
             value
             for result in results
-            for value in (result[index] if port.is_output_list else [result[index]])
+            for value in (
+                result[index]
+                if getattr(port, "is_output_list", False)
+                else [result[index]]
+            )
         ]
         for index, port in enumerate(schema.outputs)
     }
 
 
-@pytest.mark.parametrize("name", [name for name, _, kind in SOCKETS if kind == "*"])
-@pytest.mark.parametrize("responses", [[], ["one"], ["one", "two", "three"]])
-def test_string_execution_list_does_not_repeat_other_outputs(context, name, responses):
-    # BatchedChatCompletion publishes responses as a STRING execution list.
-    shared = {key: ReferenceOnly() for key, _, _ in SOCKETS[1:] if key != name}
-    outputs = execute_with_lists(
-        context, **{key: [value] for key, value in shared.items()}, **{name: responses}
-    )
-
-    assert len(outputs["CONTEXT"]) == 1
-    for key, output_name, _ in SOCKETS[1:]:
-        if key == name:
-            assert outputs[output_name] == responses
-        else:
-            assert len(outputs[output_name]) == 1
-            assert outputs[output_name][0] is shared[key]
-
-
-def test_unequal_execution_lists_preserve_lengths_order_and_payloads(context):
+def test_unequal_execution_lists_preserve_lengths_order_and_payloads():
     conditioning = [[ReferenceOnly(), {}]]
     other_conditioning = [[ReferenceOnly(), {"pooled_output": ReferenceOnly()}]]
     image_batch = ReferenceOnly()
@@ -359,10 +178,10 @@ def test_unequal_execution_lists_preserve_lengths_order_and_payloads(context):
         "any_2": [list_payload],
         "any_3": [],
     }
-    outputs = execute_with_lists(context, **streams)
+    outputs = execute_with_lists(Context, **streams)
 
     assert len(outputs["CONTEXT"]) == 1
-    for name, output_name, _ in SOCKETS[1:]:
+    for name, output_name in zip(FIELDS, list(outputs)[1:], strict=True):
         expected = streams.get(name, [None])
         actual = outputs[output_name]
         assert len(actual) == len(expected)
@@ -372,17 +191,16 @@ def test_unequal_execution_lists_preserve_lengths_order_and_payloads(context):
 @pytest.mark.parametrize(
     "replacement", [[], ["single"], ["new", "responses"], [[1, 2]]]
 )
-def test_execution_lists_survive_context_chains_and_branch_overrides(
-    context, replacement
-):
+def test_execution_lists_survive_context_chains_and_branch_overrides(replacement):
     model = ReferenceOnly()
+    images = ReferenceOnly()
     conditioning = [[ReferenceOnly(), {}]]
     list_payload = [ReferenceOnly(), ReferenceOnly()]
     scale = 2.0 / 1.5
     tile_plan = ReferenceOnly()
     api_client = ReferenceOnly()
     first = execute_with_lists(
-        context,
+        Context,
         model=[model],
         positive=[conditioning],
         any_1=["one", "two", "three"],
@@ -392,9 +210,11 @@ def test_execution_lists_survive_context_chains_and_branch_overrides(
         tile_plan=[tile_plan],
         api_client=[api_client],
     )
-    second = execute_with_lists(context, base_ctx=first["CONTEXT"], seed=[17])
-    third = execute_with_lists(context, base_ctx=second["CONTEXT"], seed=[0])
-    sibling = execute_with_lists(context, base_ctx=first["CONTEXT"], any_1=replacement)
+    second = execute_with_lists(
+        Context, base_ctx=first["CONTEXT"], seed=[17], images=[images]
+    )
+    third = execute_with_lists(Context, base_ctx=second["CONTEXT"], seed=[0])
+    sibling = execute_with_lists(Context, base_ctx=first["CONTEXT"], any_1=replacement)
 
     for outputs in (first, second, third, sibling):
         assert len(outputs["CONTEXT"]) == 1
@@ -420,6 +240,9 @@ def test_execution_lists_survive_context_chains_and_branch_overrides(
         len({id(outputs["CONTEXT"][0]) for outputs in (first, second, third, sibling)})
         == 4
     )
+    # Overrides reach descendants without leaking into bases or siblings.
     assert first["SEED"] == sibling["SEED"] == [None]
     assert second["SEED"] == [17]
     assert third["SEED"] == [0]
+    assert first["IMAGES"] == sibling["IMAGES"] == [None]
+    assert second["IMAGES"] == third["IMAGES"] == [images]

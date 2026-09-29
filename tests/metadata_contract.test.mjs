@@ -50,10 +50,7 @@ for (const sample of samples) {
 
     const model = sample.metadata.Model;
     const hash = sample.metadata["Model hash"];
-    assert.deepEqual(
-      parsed.raw.resources,
-      hash ? [{ type: "model", name: model, hash }] : [],
-    );
+    assert.deepEqual(parsed.raw.resources, sample.resources);
     assert.deepEqual(
       parsed.civitai.generation.model,
       model ? { name: model, hash: hash ?? undefined } : undefined,
@@ -61,13 +58,14 @@ for (const sample of samples) {
   });
 
   if (sample.format === "png") {
-    test(`ComfyUI PNG workflow recovery: ${sample.name}`, async () => {
+    test(`ComfyUI PNG metadata recovery: ${sample.name}`, async () => {
       const bytes = await readFile(sample.path);
       const buffer = bytes.buffer.slice(
         bytes.byteOffset,
         bytes.byteOffset + bytes.byteLength,
       );
       const parsed = await getFromPngBuffer(buffer);
+      assert.ok(parsed.parameters.startsWith(sample.parameters_prefix));
       assert.ok(parsed.parameters.includes("\nSteps: "));
       if (sample.workflow) {
         assert.deepEqual(JSON.parse(parsed.workflow), sample.workflow);

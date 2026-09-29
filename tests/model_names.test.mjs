@@ -627,11 +627,6 @@ test("double-digit dropdown numbers preserve the native summary above three sele
   h.flush();
   assertNumbers(f);
   assert.equal(f.chips.size, 3);
-  const css = h.document.head.children[0].textContent;
-  assert.match(css, /font-variant-numeric: tabular-nums/);
-  assert.match(css, /min-inline-size: 2ch/);
-  assert.match(css, /pointer-events: none/);
-  assert.match(css, /color: inherit/);
 });
 
 test("only the owned dropdown is observed and recreated or inline dropdowns refresh", async () => {

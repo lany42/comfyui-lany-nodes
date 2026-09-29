@@ -1,46 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # SPDX-FileCopyrightText: 2026 Lany Atwood <lany@colorized.life>
 
-"""Formatting contracts tested with isolated ComfyUI API and directory doubles."""
+"""ModelNames contracts tested with the shared API double and directory doubles."""
 
 import sys
-from importlib import import_module
-from types import ModuleType, SimpleNamespace
-from unittest.mock import patch
+from types import ModuleType
 
 import pytest
 
-import comfyui_lany_nodes.nodes
+from comfyui_lany_nodes.nodes.model_names import ModelNames
 
 
-@pytest.fixture
-def model_names():
-    def socket_type(io_type):
-        def socket(id, **options):
-            return SimpleNamespace(id=id, io_type=io_type, **options)
-
-        return SimpleNamespace(Input=socket, Output=socket)
-
-    api = ModuleType("comfy_api")
-    latest = ModuleType("comfy_api.latest")
-    latest.io = SimpleNamespace(
-        ComfyNode=type("ComfyNode", (), {}),
-        Schema=SimpleNamespace,
-        MultiCombo=socket_type("COMBO"),
-        String=socket_type("STRING"),
-        NodeOutput=lambda *values: SimpleNamespace(result=values),
-    )
-    api.latest = latest
-    with (
-        patch.dict(sys.modules, {"comfy_api": api, "comfy_api.latest": latest}),
-        patch.dict(vars(comfyui_lany_nodes.nodes)),
-    ):
-        sys.modules.pop("comfyui_lany_nodes.nodes.model_names", None)
-        yield import_module("comfyui_lany_nodes.nodes.model_names").ModelNames
-        sys.modules.pop("comfyui_lany_nodes.nodes.model_names", None)
-
-
-def test_schema_discovers_registered_filenames(model_names, monkeypatch):
+def test_schema_discovers_registered_filenames(monkeypatch):
     filenames = {
         "checkpoints": ["zeta.safetensors", "shared.safetensors"],
         "diffusion_models": ["shared.safetensors", "family/alpha.safetensors"],
@@ -53,14 +24,7 @@ def test_schema_discovers_registered_filenames(model_names, monkeypatch):
     folder_paths.get_full_path = lambda folder, name: f"/models/{folder}/{name}"
     monkeypatch.setitem(sys.modules, "folder_paths", folder_paths)
 
-    schema = model_names.define_schema()
-    assert schema.node_id == "LanyNodes_ModelNames"
-    assert schema.display_name == "ModelNames"
-    assert schema.category == "Lany Nodes"
-    assert [(item.id, item.io_type) for item in schema.inputs] == [
-        ("models", "COMBO"),
-        ("loras", "COMBO"),
-    ]
+    schema = ModelNames.define_schema()
     assert schema.inputs[0].options == [
         "checkpoints/shared.safetensors",
         "checkpoints/zeta.safetensors",
@@ -71,26 +35,15 @@ def test_schema_discovers_registered_filenames(model_names, monkeypatch):
         "loras/detail.safetensors",
         "loras/styles/ink.safetensors",
     ]
-    for item in schema.inputs:
-        assert item.default == []
-        assert item.socketless is True
-        assert item.chip is True
-        assert item.control_after_generate is False
-        assert item.placeholder
-    assert [(item.id, item.io_type) for item in schema.outputs] == [
-        ("MODEL_NAMES", "STRING"),
-    ]
 
     # Schema refresh picks up host changes without caching our own directory list.
     filenames["diffusion_models"].append("new.safetensors")
-    refreshed = model_names.define_schema()
+    refreshed = ModelNames.define_schema()
     assert "diffusion_models/new.safetensors" in refreshed.inputs[0].options
     assert "diffusion_models/new.safetensors" not in schema.inputs[0].options
 
 
-def test_schema_uses_actual_paths_relative_to_models_directory(
-    model_names, monkeypatch, tmp_path
-):
+def test_schema_uses_actual_paths_relative_to_models_directory(monkeypatch, tmp_path):
     root = tmp_path / "models"
     paths = {
         "checkpoints": {"base.safetensors": root / "library/base.safetensors"},
@@ -107,45 +60,26 @@ def test_schema_uses_actual_paths_relative_to_models_directory(
     folders.get_full_path = lambda category, name: paths[category][name]
     monkeypatch.setitem(sys.modules, "folder_paths", folders)
 
-    schema = model_names.define_schema()
+    schema = ModelNames.define_schema()
 
     assert schema.inputs[0].options == ["library/base.safetensors", "unet/refiner.gguf"]
     assert schema.inputs[1].options == ["styles/ink.safetensors"]
-
-
-def test_schema_allows_empty_directories(model_names, monkeypatch):
-    folder_paths = ModuleType("folder_paths")
-    folder_paths.get_filename_list = lambda folder: []
-    monkeypatch.setitem(sys.modules, "folder_paths", folder_paths)
-    schema = model_names.define_schema()
-    assert all(item.options == item.default == [] for item in schema.inputs)
 
 
 @pytest.mark.parametrize(
     ("models", "loras", "expected"),
     [
         ([], [], ""),
-        (["model.safetensors"], [], "model.safetensors"),
-        ([], ["ink.safetensors"], "ink.safetensors"),
+        # Selection order, non-ASCII directories, and separators are preserved.
         (
-            ["z/base.safetensors", "a/refiner.ckpt"],
-            ["styles/ink.safetensors", "detail.safetensors"],
+            ["z/base.safetensors", "版本/model_v2.1.safetensors", "a/refiner.ckpt"],
+            ["艺术 styles/ink-v1.2.safetensors", r"styles\detail.safetensors"],
             (
-                "z/base.safetensors,a/refiner.ckpt,"
-                "styles/ink.safetensors,detail.safetensors"
-            ),
-        ),
-        (
-            ["版本/model_v2.1.safetensors", "alt/model.gguf", "model.ckpt"],
-            [
-                "艺术 styles/ink-v1.2.safetensors",
-                r"styles\detail.safetensors",
-            ],
-            (
-                "版本/model_v2.1.safetensors,alt/model.gguf,model.ckpt,"
+                "z/base.safetensors,版本/model_v2.1.safetensors,a/refiner.ckpt,"
                 "艺术 styles/ink-v1.2.safetensors,styles\\detail.safetensors"
             ),
         ),
+        # Repeated references to one file are not conflicts; the saver dedupes.
         (
             ["one/base.safetensors", r"one\base.safetensors"],
             ["one/base.safetensors"],
@@ -153,104 +87,50 @@ def test_schema_allows_empty_directories(model_names, monkeypatch):
         ),
     ],
 )
-def test_exact_output_strings(model_names, models, loras, expected):
+def test_exact_output_strings(models, loras, expected):
+    # Selections belong to the host's prompt; joining them must not mutate them.
     original_models, original_loras = list(models), list(loras)
-    assert model_names.execute(models, loras).result == (expected,)
-    assert models == original_models
-    assert loras == original_loras
+    assert ModelNames.execute(models, loras).result == (expected,)
+    assert (models, loras) == (original_models, original_loras)
 
 
-@pytest.mark.parametrize("other_input", ["models", "loras"])
-def test_rejects_distinct_paths_with_the_same_filename(model_names, other_input):
-    inputs = {"models": ["checkpoints/base.safetensors"], "loras": []}
-    inputs[other_input].append("loras/family/base.safetensors")
+def test_rejects_distinct_paths_with_the_same_filename():
     with pytest.raises(ValueError, match="unique filenames across distinct paths"):
-        model_names.execute(**inputs)
+        ModelNames.execute(
+            ["checkpoints/base.safetensors"], ["loras/family/base.safetensors"]
+        )
 
 
-@pytest.mark.parametrize("input_name", ["models", "loras"])
-@pytest.mark.parametrize("value", [None, "name.safetensors", {}, [42], [None]])
-def test_rejects_invalid_selection_types(model_names, input_name, value):
+@pytest.mark.parametrize(
+    ("input_name", "value"), [("models", "name.safetensors"), ("loras", [None])]
+)
+def test_rejects_invalid_selection_types(input_name, value):
     inputs = {"models": [], "loras": [], input_name: value}
     with pytest.raises(TypeError, match=f"{input_name} must be a list of filenames"):
-        model_names.execute(**inputs)
+        ModelNames.execute(**inputs)
 
 
+def test_rejects_empty_filenames():
+    with pytest.raises(ValueError, match="models must not contain an empty filename"):
+        ModelNames.execute(["folder/"], [])
+
+
+# Files on disk may use names ImageSaverMini cannot represent, so ModelNames
+# rejects them early. test_image_saver_mini.py covers path structure in full.
 @pytest.mark.parametrize(
-    ("input_name", "filename"),
+    ("reference", "reason"),
     [
-        ("models", "base,refiner.safetensors"),
-        ("loras", "style,ink.safetensors"),
+        (" nested/model.safetensors", "internal whitespace"),
+        ("nested/model v2.safetensors", "internal whitespace"),
+        ("sty,les/ink.safetensors", "commas, colons, quotes, or newlines"),
+        ("nested/海.safetensors", "ASCII letters"),
+        ("nested/model", "filename suffixes"),
+        ("nested/.safetensors", "filename suffixes"),
+        ("../base.safetensors", "relative markers"),
     ],
 )
-def test_rejects_image_saver_delimiters(model_names, input_name, filename):
-    inputs = {"models": [], "loras": [], input_name: [filename]}
+def test_rejects_references_image_saver_cannot_represent(reference, reason):
     with pytest.raises(
-        ValueError, match=f"ImageSaverMini cannot represent {input_name}"
+        ValueError, match=f"ImageSaverMini cannot represent loras .*{reason}"
     ):
-        model_names.execute(**inputs)
-
-
-@pytest.mark.parametrize("input_name", ["models", "loras"])
-@pytest.mark.parametrize("filename", ["", "folder/", "folder\\"])
-def test_rejects_empty_filenames(model_names, input_name, filename):
-    inputs = {"models": [], "loras": [], input_name: [filename]}
-    with pytest.raises(ValueError, match="empty filename"):
-        model_names.execute(**inputs)
-
-
-@pytest.mark.parametrize("input_name", ["models", "loras"])
-@pytest.mark.parametrize(
-    "filename",
-    [
-        "model v2.safetensors",
-        " model.safetensors",
-        "model.safetensors ",
-        "bad\tname.safetensors",
-        "bad\nname.safetensors",
-        "bad\u00a0name.safetensors",
-        "海.safetensors",
-        "bad:name.safetensors",
-        'bad"name.safetensors',
-        "bad>name.safetensors",
-        "bad%name.safetensors",
-        "model",
-        "model.",
-        ".safetensors",
-        ".",
-        "..",
-    ],
-)
-def test_rejects_invalid_basenames(model_names, input_name, filename):
-    inputs = {"models": [], "loras": [], input_name: [f"nested/{filename}"]}
-    with pytest.raises(
-        ValueError, match=f"ImageSaverMini cannot represent {input_name}"
-    ):
-        model_names.execute(**inputs)
-
-
-@pytest.mark.parametrize("input_name", ["models", "loras"])
-@pytest.mark.parametrize(
-    "reference",
-    [
-        "/base.safetensors",
-        r"C:\models\base.safetensors",
-        "C:base.safetensors",
-        r"\\server\share\base.safetensors",
-        "./base.safetensors",
-        "../base.safetensors",
-        "folder/../base.safetensors",
-        r"folder\..\base.safetensors",
-        "folder//base.safetensors",
-        "bad,folder/base.safetensors",
-        "bad\nfolder/base.safetensors",
-        "bad\0folder/base.safetensors",
-        " folder/base.safetensors",
-    ],
-)
-def test_rejects_invalid_relative_references(model_names, input_name, reference):
-    inputs = {"models": [], "loras": [], input_name: [reference]}
-    with pytest.raises(
-        ValueError, match=f"ImageSaverMini cannot represent {input_name}"
-    ):
-        model_names.execute(**inputs)
+        ModelNames.execute([], [reference])

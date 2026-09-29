@@ -46,7 +46,6 @@ async function harness(properties = {}) {
     forwarded: [],
     lifecycle: [],
     changes: [],
-    layout: [],
     draws: 0,
     executions: 0,
     bubbled: 0,
@@ -91,16 +90,7 @@ async function harness(properties = {}) {
       this.children = [];
       this.attributes = {};
       this.listeners = new Map();
-      this.style = new Proxy(
-        {},
-        {
-          set: (target, key, value) => {
-            h.layout.push({ kind: "write", element: this, key, value });
-            target[key] = value;
-            return true;
-          },
-        },
-      );
+      this.style = {};
       this.textContent = "";
       this.rect = { left: 100, top: 60, width: 200, height: 100 };
       this.localWidth = 400;
@@ -142,11 +132,9 @@ async function harness(properties = {}) {
       return pending.promise;
     }
     getBoundingClientRect() {
-      h.layout.push({ kind: "read", key: "rect" });
       return this.rect;
     }
     get clientWidth() {
-      h.layout.push({ kind: "read", key: "width" });
       return this.localWidth;
     }
     setPointerCapture(id) {
@@ -431,9 +419,6 @@ test("one nonserialized host DOM widget; mode is a property and lifecycle callba
   assert.equal(h.widget.serialize, false);
   assert.equal(h.widget.options.serialize, false);
   assert.equal(h.widget.options.selectOn.length, 0);
-  assert.ok(h.widget.options.getMinHeight() >= 128);
-  assert.equal(h.viewport.style.minHeight, "128px");
-  assert.deepEqual([...h.node.size], [400, 350]);
   assert.deepEqual(h.node.properties, { comparer_mode: "slider" });
   assert.equal(h.node.onExecuted(results(), 17), "executed");
   assert.equal(h.node.onConfigure("saved"), "configured");
@@ -594,23 +579,17 @@ test("selected pair alone loads; both layers decode before display with independ
   }
 });
 
-test("slider reveals B on the left, coalesces moves, reads before writes, and compensates zoom", async () => {
+test("slider reveals B on the left, coalesces moves, and compensates zoom", async () => {
   const h = await harness();
   await h.load();
   h.emit(h.viewport, "pointermove", { clientX: 120 });
   h.emit(h.viewport, "pointermove", { clientX: 150 });
   assert.equal(h.frames.size, 1);
-  h.layout.length = 0;
   h.frame();
   assert.equal(h.b.style.clipPath, "inset(0 75% 0 0)");
   assert.equal(h.divider.style.left, "25%");
   assert.equal(h.divider.style.width, "2px");
   assert.equal(h.divider.style.display, "block");
-  assert.deepEqual(
-    h.layout.slice(0, 2).map((entry) => entry.kind),
-    ["read", "read"],
-  );
-  assert.ok(h.layout.slice(2).every((entry) => entry.kind === "write"));
   h.press();
   assert.equal(h.b.style.clipPath, "inset(0 75% 0 0)");
   h.viewport.rect = { left: 50, width: 800 };

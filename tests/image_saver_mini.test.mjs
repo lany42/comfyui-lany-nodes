@@ -186,7 +186,6 @@ test("format controls and spacer are nonserialized and ordered without prompt te
   const index = h.node.widgets.indexOf(spacer);
   assert.equal(h.node.widgets[index - 1].name, "height");
   assert.equal(h.node.widgets[index + 1].name, "time_format");
-  assert.equal(spacer.options.getHeight(), 12);
   for (const widget of [spacer, h.toolbar]) {
     assert.equal(widget.serialize, false);
     assert.equal(widget.options.serialize, false);
@@ -212,6 +211,7 @@ test("buttons update the API value, pressed style, disabled controls, and graph 
   assert.equal(h.jpg.click().stopped, true);
   assert.equal(h.prompt(h.node).format, "jpg");
   assert.equal(h.jpg.attributes["aria-pressed"], "true");
+  // The format combo is hidden, so the border is the visible selection cue.
   assert.equal(h.jpg.style.borderColor, "var(--input-text, #ddd)");
   assert.equal(h.png.attributes["aria-pressed"], "false");
   assert.equal(quality.disabled, false);

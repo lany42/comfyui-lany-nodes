@@ -12,7 +12,8 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    "suite_name", ["seed", "image_comparer", "image_saver_mini", "model_names"]
+    "suite_name",
+    ["seed", "image_comparer", "image_saver_mini", "model_names", "scale_to"],
 )
 def test_frontend(tmp_path, suite_name):
     node = shutil.which("node")

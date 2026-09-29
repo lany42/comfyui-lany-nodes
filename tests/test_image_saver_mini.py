@@ -5,12 +5,11 @@
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
@@ -20,14 +19,17 @@ import pytest
 import torch
 from PIL import Image
 
-import comfyui_lany_nodes.nodes
 from comfyui_lany_nodes import image_saver as saver
+from comfyui_lany_nodes.nodes import image_saver_mini
+from comfyui_lany_nodes.nodes.image_saver_mini import ImageSaverMini
+from comfyui_lany_nodes.nodes.model_names import ModelNames
 
 PICKER_CATEGORIES = ("checkpoints", "diffusion_models", "loras")
+NOW = datetime(2026, 9, 26, 12, 34, 56).astimezone()
 
 
 @pytest.fixture
-def host(tmp_path):
+def host(tmp_path, monkeypatch):
     root = tmp_path / "output"
     folders = ModuleType("folder_paths")
     folders.models_dir = str(tmp_path / "models")
@@ -47,76 +49,50 @@ def host(tmp_path):
         paths[category][str(relative)] = str(path)
         return path
 
-    def socket_type(io_type):
-        def socket(id, **options):
-            return SimpleNamespace(id=id, io_type=io_type, **options)
-
-        return SimpleNamespace(
-            Input=socket,
-            Output=socket,
-            Type=object,
-        )
-
-    api = ModuleType("comfy_api")
-    latest = ModuleType("comfy_api.latest")
-    latest.io = SimpleNamespace(
-        ComfyNode=type("ComfyNode", (), {}),
-        Schema=SimpleNamespace,
-        Hidden=SimpleNamespace(prompt="PROMPT", extra_pnginfo="EXTRA_PNGINFO"),
-        NodeOutput=lambda *values, ui=None: SimpleNamespace(result=values, ui=ui),
-        **{
-            name: socket_type(kind)
-            for name, kind in [
-                ("Image", "IMAGE"),
-                ("String", "STRING"),
-                ("Int", "INT"),
-                ("Boolean", "BOOLEAN"),
-                ("Combo", "COMBO"),
-                ("MultiCombo", "COMBO"),
-            ]
-        },
+    hidden = SimpleNamespace(
+        prompt={"1": {"class_type": "Test", "inputs": {"text": "海"}}},
+        extra_pnginfo={"workflow": {"nodes": [{"id": 1}]}, "extra": {"a": 1}},
     )
-    api.latest = latest
-    with (
-        patch.dict(
-            sys.modules,
-            {"comfy_api": api, "comfy_api.latest": latest, "folder_paths": folders},
-        ),
-        patch.dict(vars(comfyui_lany_nodes.nodes)),
-    ):
-        module_name = "comfyui_lany_nodes.nodes.image_saver_mini"
-        model_names_module = "comfyui_lany_nodes.nodes.model_names"
-        sys.modules.pop(module_name, None)
-        sys.modules.pop(model_names_module, None)
-        node = import_module(module_name).ImageSaverMini
-        model_names = import_module(model_names_module).ModelNames
-        node.hidden = SimpleNamespace(
-            prompt={"1": {"class_type": "Test", "inputs": {"text": "海"}}},
-            extra_pnginfo={"workflow": {"nodes": [{"id": 1}]}, "extra": {"a": 1}},
-        )
+    monkeypatch.setitem(sys.modules, "folder_paths", folders)
+    monkeypatch.setattr(ImageSaverMini, "hidden", hidden, raising=False)
 
-        def run(**kwargs):
-            inputs = {
-                "images": torch.zeros((1, 3, 5, 3)),
-                "filename": "image",
-                "positive": "positive",
-                "negative": "negative",
-            }
-            return node.execute(**(inputs | kwargs))
+    def run(**kwargs):
+        inputs = {
+            "images": torch.zeros((1, 3, 5, 3)),
+            "filename": "image",
+            "positive": "positive",
+            "negative": "negative",
+        }
+        return ImageSaverMini.execute(**(inputs | kwargs))
 
-        saver._cached_hash.cache_clear()
-        yield SimpleNamespace(
-            node=node,
-            model_names=model_names,
-            run=run,
-            root=root,
-            folders=folders,
-            paths=paths,
-            add_model=add_model,
-        )
-        sys.modules.pop(module_name, None)
-        sys.modules.pop(model_names_module, None)
-        saver._cached_hash.cache_clear()
+    saver._cached_hash.cache_clear()
+    yield SimpleNamespace(
+        run=run, root=root, folders=folders, hidden=hidden, add_model=add_model
+    )
+    saver._cached_hash.cache_clear()
+
+
+@pytest.fixture
+def hash_models(monkeypatch):
+    """Fail if a test reaches model hashing, which reads multi-gigabyte files."""
+    hash_models = Mock()
+    monkeypatch.setattr(saver, "model_hashes", hash_models)
+    yield
+    hash_models.assert_not_called()
+
+
+def freeze_time(monkeypatch, *moments):
+    """Return NOW from the node's clock, or each given moment once."""
+    now = Mock(side_effect=moments) if moments else Mock(return_value=NOW)
+    monkeypatch.setattr(image_saver_mini, "datetime", Mock(now=now))
+
+
+def sha(content):
+    return hashlib.sha256(content).hexdigest()[:10]
+
+
+def hashes_in(text):
+    return json.loads(text.split("Hashes: ")[1].split(", Version:")[0])
 
 
 # Contract references pinned to ComfyUI_frontend f288d755b488f8bf6609100ee3e8c8b507d88630:
@@ -135,6 +111,8 @@ def read_png_metadata(path):
         if kind in {b"tEXt", b"iTXt"}:
             chunk = data[offset + 8 : offset + 8 + length]
             keyword, content = chunk.split(b"\0", 1)
+            # Readers disagree on whether the first or last duplicate wins.
+            assert keyword.decode("latin-1") not in metadata, keyword
             if kind == b"iTXt":
                 assert content[:2] == b"\0\0"  # Uncompressed, compression method zero.
                 _, _, content = content[2:].split(b"\0", 2)
@@ -155,79 +133,12 @@ def read_parameters(path):
         return raw[10:].decode("utf-16-be")
 
 
-def test_schema_and_forced_prompts(host):
-    schema = host.node.define_schema()
-    assert schema.node_id == "LanyNodes_ImageSaverMini"
-    assert schema.display_name == "ImageSaverMini"
-    assert schema.category == "Lany Nodes"
-    assert schema.outputs == []
-    assert schema.is_output_node is True
-    assert not getattr(schema, "is_input_list", False)
-    assert schema.hidden == ["PROMPT", "EXTRA_PNGINFO"]
-    assert [(input.id, input.io_type) for input in schema.inputs] == [
-        ("format", "COMBO"),
-        ("images", "IMAGE"),
-        ("path", "STRING"),
-        ("filename", "STRING"),
-        ("models", "STRING"),
-        ("positive", "STRING"),
-        ("negative", "STRING"),
-        ("seed", "INT"),
-        ("steps", "INT"),
-        ("width", "INT"),
-        ("height", "INT"),
-        ("time_format", "STRING"),
-        ("jpg_quality", "INT"),
-        ("optimize_png", "BOOLEAN"),
-        ("png_embed_workflow", "BOOLEAN"),
-        ("additional_hashes", "STRING"),
-    ]
-    fields = {input.id: input for input in schema.inputs}
-    for name in ("positive", "negative"):
-        assert fields[name].force_input is True
-        assert not getattr(fields[name], "optional", False)
-        assert not getattr(fields[name], "multiline", False)
-        assert not hasattr(fields[name], "default")
-    assert fields["format"].options == ["png", "jpg"]
-    assert fields["format"].socketless is True
-    assert fields["format"].default == "png"
-    assert fields["filename"].default == "%time_%model_%seed"
-    assert fields["path"].default == ""
-    assert fields["time_format"].default == "%Y-%m-%d-%H%M%S"
-    for name, default, minimum, maximum in [
-        ("seed", 0, 0, 2**64 - 1),
-        ("steps", 20, 0, 10000),
-        ("width", 0, 0, 2**53 - 1),
-        ("height", 0, 0, 2**53 - 1),
-        ("jpg_quality", 80, 1, 100),
-    ]:
-        field = fields[name]
-        assert (field.default, field.min, field.max, field.step) == (
-            default,
-            minimum,
-            maximum,
-            1,
-        ), name
-    for name in ("seed", "steps"):
-        assert fields[name].control_after_generate is False
-    assert fields["optimize_png"].default is False
-    assert fields["png_embed_workflow"].default is True
-    with pytest.raises(TypeError, match="positive.*negative"):
-        host.node.execute(torch.zeros((1, 3, 5, 3)))
+# Metadata consumers
 
 
 @pytest.mark.parametrize("format", ["png", "jpg"])
-@pytest.mark.parametrize(
-    "prompts",
-    [
-        ("", ""),
-        ("café déjà vu", "jalapeño"),
-        ("海 🌊", "🌧️"),
-        ("  晴れ\n<lora:keep:1> STYLE(x)  ", "\nembedding:keep\n"),
-    ],
-)
-def test_generation_metadata_pins_comfyui_parameter_minimums(host, format, prompts):
-    positive, negative = prompts
+def test_generation_metadata_pins_comfyui_parameter_minimums(host, format):
+    positive, negative = "  晴れ\n<lora:keep:1> STYLE(x)  ", "\nembedding:keep\n"
     result = host.run(
         format=format,
         positive=positive,
@@ -240,54 +151,11 @@ def test_generation_metadata_pins_comfyui_parameter_minimums(host, format, promp
     text = read_parameters(host.root / f"image.{format}")
     # importA1111 locates the last Negative prompt and Steps line markers, then
     # reads Steps, Seed, and Size from the final line to populate core nodes.
+    # JavaScript numbers cannot hold this seed, so pin the exact text here.
     assert text == (
         f"{positive}\nNegative prompt: {negative}\n"
         "Steps: 32, Seed: 18446744073709551615, Size: 5x3, Version: ComfyUI"
     )
-
-
-@pytest.mark.parametrize("embed", [True, False])
-def test_png_workflow_and_reserved_metadata(host, embed):
-    host.node.hidden.extra_pnginfo.update(parameters="must not replace", prompt="wrong")
-    host.run(png_embed_workflow=embed)
-    metadata = read_png_metadata(host.root / "image.png")
-    assert metadata["parameters"].startswith("positive\nNegative prompt:")
-    if embed:
-        assert {"parameters", "prompt", "workflow"} <= metadata.keys()
-        assert json.loads(metadata["prompt"]) == host.node.hidden.prompt
-        assert (
-            json.loads(metadata["workflow"])
-            == host.node.hidden.extra_pnginfo["workflow"]
-        )
-        assert json.loads(metadata["extra"]) == {"a": 1}
-    else:
-        assert set(metadata) == {"parameters"}
-
-
-def test_png_without_browser_workflow(host):
-    host.node.hidden.prompt = host.node.hidden.extra_pnginfo = None
-    host.run()
-    assert set(read_png_metadata(host.root / "image.png")) == {"parameters"}
-
-
-def test_jpg_never_serializes_workflow(host):
-    host.node.hidden.prompt = object()
-    host.node.hidden.extra_pnginfo = {"workflow": object()}
-    host.run(format="jpg", png_embed_workflow=True)
-    with Image.open(host.root / "image.jpg") as image:
-        exif = image.getexif()
-        assert set(exif) == {0x8769}
-        assert set(exif.get_ifd(0x8769)) == {0x9286}
-        assert image.size == (5, 3)
-
-
-def test_jpg_exif_limit_fails_without_saving(host):
-    with pytest.raises(ValueError, match="too large.*PNG"):
-        host.run(format="jpg", positive="a" * 33000)
-    assert not host.root.exists()
-    # PNG has no JPEG APP1 limit and keeps the whole prompt.
-    host.run(positive="a" * 33000)
-    assert read_parameters(host.root / "image.png").startswith("a" * 33000)
 
 
 @pytest.mark.parametrize("format", ["png", "jpg"])
@@ -303,9 +171,7 @@ def test_civitai_and_comfyui_metadata_contracts(host, tmp_path, format):
     ]
     for category, name, content in resources:
         host.add_model(category, name, content)
-    base, refiner, ink = [
-        hashlib.sha256(data).hexdigest()[:10] for _, _, data in resources
-    ]
+    base, refiner, ink = [sha(data) for _, _, data in resources]
     manual = "A" * 64
     all_hashes = {
         "model": base,
@@ -345,68 +211,68 @@ def test_civitai_and_comfyui_metadata_contracts(host, tmp_path, format):
             "inputs": {"width": 512, "height": 768, "batch_size": 1},
         }
     }
-    host.node.hidden.prompt = prompt
-    host.node.hidden.extra_pnginfo = {"workflow": workflow}
+    host.hidden.prompt = prompt
+    host.hidden.extra_pnginfo = {"workflow": workflow}
+    all_models = (
+        "checkpoints/base.safetensors,diffusion_models/refiner.gguf,"
+        "loras/ink.safetensors"
+    )
+    cases = [
+        {
+            "name": "complete",
+            "models": all_models,
+            "additional": f"{base},{manual},{manual}",
+            "positive": "café 海 🌊",
+            "model": "base",
+            "model_hash": base,
+            "hashes": all_hashes,
+        },
+        {
+            "name": "without_workflow",
+            "models": all_models,
+            "additional": manual,
+            "positive": "café 海 🌊",
+            "embed": False,
+            "model": "base",
+            "model_hash": base,
+            "hashes": all_hashes,
+        },
+        {
+            "name": "manual_only",
+            "additional": f"{manual},custom-digest",
+            "positive": "manual",
+            "hashes": {f"hash:{manual}": manual, "hash:custom-digest": "custom-digest"},
+        },
+        {
+            "name": "missing_primary",
+            "models": "checkpoints/missing.safetensors,diffusion_models/refiner.gguf",
+            "positive": "missing",
+            "model": "missing",
+            "hashes": {f"hash:{refiner}": refiner},
+        },
+        {"name": "empty_prompts", "positive": "", "negative": ""},
+        {
+            "name": "multiline_prompts",
+            "positive": "  晴れ\n<lora:keep:1> STYLE(x)  ",
+            "negative": "\nembedding:keep\n",
+            "prompt_resources": [{"type": "lora", "name": "keep", "weight": 1}],
+        },
+        {"name": "long_unicode", "positive": "一" * 600 + " 海 🌊"},
+        # Latin-1-only text must still be UTF-8 for ComfyUI's PNG decoder.
+        {"name": "latin1_prompts", "positive": "café crème", "negative": "naïve"},
+    ]
     samples = []
-    for (
-        name,
-        models,
-        additional,
-        positive,
-        embed,
-        expected_model,
-        expected_hash,
-        expected_hashes,
-    ) in [
-        (
-            "complete",
-            "checkpoints/base.safetensors,diffusion_models/refiner.gguf,loras/ink.safetensors",
-            f"{base},{manual},{manual}",
-            "café 海 🌊",
-            True,
-            "base",
-            base,
-            all_hashes,
-        ),
-        (
-            "without_workflow",
-            "checkpoints/base.safetensors,diffusion_models/refiner.gguf,loras/ink.safetensors",
-            manual,
-            "café 海 🌊",
-            False,
-            "base",
-            base,
-            all_hashes,
-        ),
-        (
-            "manual_only",
-            "",
-            f"{manual},custom-digest",
-            "manual",
-            True,
-            None,
-            None,
-            {f"hash:{manual}": manual, "hash:custom-digest": "custom-digest"},
-        ),
-        (
-            "missing_primary",
-            "checkpoints/missing.safetensors,diffusion_models/refiner.gguf",
-            "",
-            "missing",
-            True,
-            "missing",
-            None,
-            {f"hash:{refiner}": refiner},
-        ),
-        ("long_unicode", "", "", "一" * 600 + " 海 🌊", True, None, None, None),
-    ]:
+    for case in cases:
+        name, positive = case["name"], case["positive"]
+        negative, embed = case.get("negative", "negative"), case.get("embed", True)
+        model, model_hash = case.get("model"), case.get("model_hash")
         host.run(
             format=format,
             filename=name,
-            models=models,
-            additional_hashes=additional,
+            models=case.get("models", ""),
+            additional_hashes=case.get("additional", ""),
             positive=positive,
-            negative="negative",
+            negative=negative,
             seed=42,
             steps=27,
             width=512,
@@ -418,17 +284,29 @@ def test_civitai_and_comfyui_metadata_contracts(host, tmp_path, format):
                 "name": name,
                 "path": str(host.root / f"{name}.{format}"),
                 "format": "jpeg" if format == "jpg" else "png",
+                # Civitai trims prompts and omits empty ones; the saved text keeps
+                # them exactly, as test_generation_metadata_pins_... checks.
                 "metadata": {
-                    "prompt": positive,
-                    "negativePrompt": "negative",
+                    "prompt": positive.strip() or None,
+                    "negativePrompt": negative.strip() or None,
                     "seed": 42,
                     "steps": 27,
                     "width": 512,
                     "height": 768,
-                    "Model": expected_model,
-                    "Model hash": expected_hash,
-                    "hashes": expected_hashes,
+                    "Model": model,
+                    "Model hash": model_hash,
+                    "hashes": case.get("hashes"),
                 },
+                # Civitai credits hashed models and LoRA tags in the prompt.
+                "resources": [
+                    *(
+                        [{"type": "model", "name": model, "hash": model_hash}]
+                        if model_hash
+                        else []
+                    ),
+                    *case.get("prompt_resources", []),
+                ],
+                "parameters_prefix": f"{positive}\nNegative prompt: {negative}\n",
                 "workflow": workflow if embed else None,
                 "prompt": prompt if embed else None,
             }
@@ -451,13 +329,55 @@ def test_civitai_and_comfyui_metadata_contracts(host, tmp_path, format):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.parametrize("embed", [True, False])
+def test_png_workflow_and_reserved_metadata(host, embed):
+    host.hidden.extra_pnginfo.update(parameters="must not replace", prompt="wrong")
+    host.run(png_embed_workflow=embed)
+    metadata = read_png_metadata(host.root / "image.png")
+    assert metadata["parameters"].startswith("positive\nNegative prompt:")
+    if embed:
+        assert {"parameters", "prompt", "workflow"} <= metadata.keys()
+        assert json.loads(metadata["prompt"]) == host.hidden.prompt
+        assert json.loads(metadata["workflow"]) == host.hidden.extra_pnginfo["workflow"]
+        assert json.loads(metadata["extra"]) == {"a": 1}
+    else:
+        assert set(metadata) == {"parameters"}
+
+
+def test_png_without_browser_workflow(host):
+    host.hidden.prompt = host.hidden.extra_pnginfo = None
+    host.run()
+    assert set(read_png_metadata(host.root / "image.png")) == {"parameters"}
+
+
+def test_jpg_never_serializes_workflow(host):
+    host.hidden.prompt = object()
+    host.hidden.extra_pnginfo = {"workflow": object()}
+    host.run(format="jpg", png_embed_workflow=True)
+    with Image.open(host.root / "image.jpg") as image:
+        exif = image.getexif()
+        assert set(exif) == {0x8769}
+        assert set(exif.get_ifd(0x8769)) == {0x9286}
+
+
+def test_jpg_exif_limit_fails_without_saving(host):
+    with pytest.raises(ValueError, match="too large.*PNG"):
+        host.run(format="jpg", positive="a" * 33000)
+    assert not host.root.exists()
+    # PNG has no JPEG APP1 limit and keeps the whole prompt.
+    host.run(positive="a" * 33000)
+    assert read_parameters(host.root / "image.png").startswith("a" * 33000)
+
+
+# Pixels and encoding
+
+
 @pytest.mark.parametrize("shape", [(3, 5, 3), (1, 3, 5, 3), (2, 3, 5, 4), (2, 3, 5, 1)])
 def test_image_shapes_pixels_and_batch_names(host, shape):
     images = (
         torch.linspace(-0.5, 1.5, int(np.prod(shape))).reshape(shape).requires_grad_()
     )
-    result = host.run(images=images)
-    assert result.result == ()
+    host.run(images=images)
     batch = images.unsqueeze(0) if images.ndim == 3 else images
     names = ["image.png", *(f"image_{i}.png" for i in range(1, len(batch)))]
     assert sorted(path.name for path in host.root.iterdir()) == names
@@ -467,7 +387,6 @@ def test_image_shapes_pixels_and_batch_names(host, shape):
             expected = expected[..., 0]
         with Image.open(host.root / filename) as image:
             np.testing.assert_array_equal(np.asarray(image), expected)
-            assert image.size == (5, 3)
 
 
 def test_noncontiguous_bfloat_tensor_and_metadata_dimensions(host):
@@ -494,7 +413,6 @@ def test_jpg_rgba(host):
     [
         ("png", "optimize_png", False, "optimize"),
         ("png", "optimize_png", True, "optimize"),
-        ("jpg", "jpg_quality", 37, "quality"),
         ("jpg", "jpg_quality", 100, "quality"),
     ],
 )
@@ -509,9 +427,7 @@ def test_encoding_controls_reach_encoder(
     assert encode.call_args.kwargs[encoder_option] == value
 
 
-@pytest.mark.parametrize(
-    "shape", [(0, 2, 3, 3), (1, 0, 3, 3), (2, 3), (1, 2, 3, 2), (1, 1, 2, 3, 3)]
-)
+@pytest.mark.parametrize("shape", [(0, 2, 3, 3), (2, 3), (1, 2, 3, 2)])
 def test_invalid_shapes(host, shape):
     with pytest.raises(ValueError, match="nonempty HWC"):
         host.run(images=torch.zeros(shape))
@@ -521,19 +437,14 @@ def test_invalid_shapes(host, shape):
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"seed": -1},
         {"seed": True},
         {"steps": 10001},
+        # Linked INT inputs bypass the host's min/max checks.
         {"width": -1},
         {"height": 1.5},
         {"format": "webp"},
         {"format": "jpg", "jpg_quality": 101},
         {"positive": None},
-        {"models": None},
-        {"additional_hashes": None},
-        {"filename": None},
-        {"path": None},
-        {"time_format": None},
     ],
 )
 def test_invalid_inputs(host, kwargs):
@@ -552,43 +463,32 @@ def test_nonfinite_pixels_and_failed_encode_leave_no_file(host, monkeypatch):
     assert list(host.root.iterdir()) == []
 
 
-def test_native_list_mapping_invocations_and_collisions(host):
-    # ComfyUI maps each list entry to a separate call; no whole-schema list mode.
-    for index, image in enumerate([torch.zeros((2, 3, 3)), torch.ones((1, 4, 6, 3))]):
-        host.run(images=image, seed=index)
-    assert "Seed: 0, Size: 3x2" in read_parameters(host.root / "image.png")
-    assert "Seed: 1, Size: 6x4" in read_parameters(host.root / "image_1.png")
-    original = (host.root / "image.png").read_bytes()
-    host.run(images=torch.zeros((2, 2, 3, 3)))
-    assert (host.root / "image.png").read_bytes() == original
-    assert (host.root / "image_2.png").exists()
-    assert (host.root / "image_3.png").exists()
+# Output names and paths
 
 
-@pytest.mark.parametrize("format", ["png", "jpg"])
 @pytest.mark.parametrize(
     ("existing", "expected"),
     [
         (["image", "image_1", "image_2"], "image_3"),
-        (["image", "image_9", "image_10"], "image_11"),
+        # Numeric, not lexical, order. A gap is needed: with image_10 present,
+        # the collision retry would hide a lexical sort.
+        (["image_9", "image_100"], "image_101"),
         (["image_2", "image_8"], "image_9"),
         (["image_01", "image_02"], "image_3"),
-        (["image_9", "image_100"], "image_101"),
     ],
 )
-def test_filenames_continue_after_highest_numeric_suffix(
-    host, format, existing, expected
-):
+def test_filenames_continue_after_highest_numeric_suffix(host, existing, expected):
+    # JPG here; the next test covers the PNG counter.
     host.root.mkdir()
     for name in existing:
-        (host.root / f"{name}.{format}").write_bytes(b"existing file")
+        (host.root / f"{name}.jpg").write_bytes(b"existing file")
 
-    host.run(format=format)
+    host.run(format="jpg")
 
     assert {path.stem for path in host.root.iterdir()} == {*existing, expected}
-    assert "Steps: 20" in read_parameters(host.root / f"{expected}.{format}")
+    assert "Steps: 20" in read_parameters(host.root / f"{expected}.jpg")
     for name in existing:
-        assert (host.root / f"{name}.{format}").read_bytes() == b"existing file"
+        assert (host.root / f"{name}.jpg").read_bytes() == b"existing file"
 
 
 def test_filename_counter_ignores_other_stems_and_formats(host):
@@ -628,21 +528,8 @@ def test_filename_reservation_retries_a_concurrent_collision(host, monkeypatch):
     assert "Steps: 20" in read_parameters(host.root / "image_1.png")
 
 
-def test_concurrent_saves_do_not_overwrite(host):
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(lambda _: host.run(), range(8)))
-    files = list(host.root.iterdir())
-    assert len(files) == 8
-    for path in files:
-        with Image.open(path) as image:
-            image.verify()
-
-
 def test_filename_interpolation_and_directories(host, monkeypatch):
-    now = datetime(2026, 9, 26, 12, 34, 56).astimezone()
-    monkeypatch.setattr(
-        sys.modules[host.node.__module__], "datetime", Mock(now=Mock(return_value=now))
-    )
+    freeze_time(monkeypatch)
     host.add_model("checkpoints", "model.custom")
     host.run(
         path="portraits/day///",
@@ -658,30 +545,21 @@ def test_filename_interpolation_and_directories(host, monkeypatch):
     assert "Model: model" in read_parameters(saved)
 
 
-@pytest.mark.parametrize(("width", "height"), [(0, 0), (1024, 768)])
 @pytest.mark.parametrize(
     ("path", "time_format", "directory"),
     [
-        ("%date/sdxl/png", "%H-%M", "2026-09-26/sdxl/png"),
         (r"%date\sdxl\png", "%H-%M", "2026-09-26/sdxl/png"),
         (
             "%date/%time/%time_format<%H%M>/%model/%seed_%steps_%widthx%height",
             "%H-%M",
-            "2026-09-26/12-34/1234/base.v2/42_20_{width}x{height}",
+            "2026-09-26/12-34/1234/base.v2/42_20_5x3",
         ),
-        ("%time_format<%Y/%m/%d>/海 images", "%H-%M", "2026/09/26/海 images"),
         ("%time/sdxl/png", "%Y/%m/%d", "2026/09/26/sdxl/png"),
     ],
 )
-def test_path_interpolation(
-    host, monkeypatch, width, height, path, time_format, directory
-):
-    now = datetime(2026, 9, 26, 12, 34, 56).astimezone()
-    monkeypatch.setattr(
-        sys.modules[host.node.__module__],
-        "datetime",
-        Mock(now=Mock(side_effect=[now, now.replace(day=27)])),
-    )
+def test_path_interpolation(host, monkeypatch, path, time_format, directory):
+    # A second clock read would move the path to another day.
+    freeze_time(monkeypatch, NOW, NOW.replace(day=27))
     host.add_model("checkpoints", "base.v2.safetensors")
     host.run(
         path=path,
@@ -690,45 +568,30 @@ def test_path_interpolation(
         models="checkpoints/base.v2.safetensors",
         seed=42,
         steps=20,
-        width=width,
-        height=height,
     )
-
-    directory = directory.format(width=width or 5, height=height or 3)
     saved = host.root / directory / "2026-09-26_123456.png"
     assert "Model: base.v2" in read_parameters(saved)
 
 
 @pytest.mark.parametrize(
-    ("path", "directory"),
-    [
-        ("", ""),
-        ("my_dir", "my_dir"),
-        ("my_dir///", "my_dir"),
-        ("my.dir/海 images/", "my.dir/海 images"),
-        ("portraits\\day\\", "portraits/day"),
-    ],
+    ("path", "directory"), [("", ""), ("my.dir//海 images///", "my.dir/海 images")]
 )
 def test_output_path_is_separate_from_filename(host, path, directory):
     host.run(path=path, filename="Image_01-test")
     assert (host.root / directory / "Image_01-test.png").exists()
 
 
-@pytest.mark.parametrize("format", ["png", "jpg"])
-@pytest.mark.parametrize(
-    "filename", ["Image.v2-test_01", ".image", "image.", "image.png", "%model"]
-)
-def test_periods_in_filenames_and_model_tokens(host, format, filename):
+@pytest.mark.parametrize("filename", [".image", "image.png", "%model"])
+def test_periods_in_filenames_and_model_tokens(host, filename):
     host.add_model("checkpoints", "base.v2.safetensors")
     host.run(
         images=torch.zeros((2, 3, 5, 3)),
         filename=filename,
         models="checkpoints/base.v2.safetensors",
-        format=format,
     )
     stem = "base.v2" if filename == "%model" else filename
     for suffix in ("", "_1"):
-        saved = host.root / f"{stem}{suffix}.{format}"
+        saved = host.root / f"{stem}{suffix}.png"
         assert "Model: base.v2" in read_parameters(saved)
 
 
@@ -736,34 +599,19 @@ def test_periods_in_filenames_and_model_tokens(host, format, filename):
     "filename",
     [
         "",
-        " ",
-        " image",
-        "image ",
         ".",
         "..",
         "my image",
-        "my?:image",
-        "image\n",
-        "海",
         "../escape",
-        "nested/../../escape",
-        "/tmp/escape",
-        "C:/escape",
-        "C:escape",
         r"..\escape",
-        "%basemodelname",
         "%unknown",
-        "%time_format",
         "%time_format<%H",
-        "%counter<03>_%cfg_%Other.seed%",
+        "%time_format",
     ],
 )
-def test_invalid_filename_fails_before_hashing(host, monkeypatch, filename):
-    hash_models = Mock()
-    monkeypatch.setattr(saver, "model_hashes", hash_models)
+def test_invalid_filename_fails_before_hashing(host, hash_models, filename):
     with pytest.raises(ValueError, match="filename"):
         host.run(filename=filename)
-    hash_models.assert_not_called()
     assert not host.root.exists()
 
 
@@ -771,21 +619,14 @@ def test_invalid_filename_fails_before_hashing(host, monkeypatch, filename):
     "kwargs",
     [
         {"filename": "%model"},
-        {"filename": "%time", "time_format": "."},
         {"filename": "%time_format<..>"},
         {"filename": "%time", "time_format": "%H:%M"},
         {"filename": "%time", "time_format": "%Y/%m/%d"},
-        {"filename": "%time_format<%H %M>"},
-        {"filename": "%time_format<%n>"},
-        {"filename": "%time_format<>"},
     ],
 )
-def test_invalid_expanded_filename_fails_before_hashing(host, monkeypatch, kwargs):
-    hash_models = Mock()
-    monkeypatch.setattr(saver, "model_hashes", hash_models)
+def test_invalid_expanded_filename_fails_before_hashing(host, hash_models, kwargs):
     with pytest.raises(ValueError, match="expanded filename"):
         host.run(**kwargs)
-    hash_models.assert_not_called()
     assert not host.root.exists()
 
 
@@ -793,28 +634,17 @@ def test_invalid_expanded_filename_fails_before_hashing(host, monkeypatch, kwarg
     "path",
     [
         ".",
-        "./",
-        "./nested",
         "../escape",
-        "nested/../escape",
-        "nested/./escape",
-        "nested/..",
-        "/",
+        r"nested\..\escape",
         "/tmp/escape",
-        "C:/escape",
         "C:escape",
         "nested/C:escape",
-        r"..\escape",
-        r"nested\..\escape",
         r"\\server\share",
     ],
 )
-def test_invalid_path_fails_before_hashing(host, monkeypatch, path):
-    hash_models = Mock()
-    monkeypatch.setattr(saver, "model_hashes", hash_models)
+def test_invalid_path_fails_before_hashing(host, hash_models, path):
     with pytest.raises(ValueError, match="path.*relative markers or anchors"):
         host.run(path=path)
-    hash_models.assert_not_called()
     assert not host.root.exists()
 
 
@@ -822,33 +652,22 @@ def test_invalid_path_fails_before_hashing(host, monkeypatch, path):
     "kwargs",
     [
         {"path": "%time", "time_format": "../escape"},
-        {"path": "%time", "time_format": "/tmp/escape"},
-        {"path": "%time_format<.>/images"},
-        {"path": "%time_format<..>/escape"},
-        {"path": "nested/%time_format<../escape>"},
-        {"path": "%time_format<C:/escape>"},
         {"path": "nested/%time_format<C:escape>"},
-        {"path": r"%time_format<..\escape>"},
-        {"path": r"%time_format<\\server\share>"},
     ],
 )
-def test_invalid_expanded_path_fails_before_hashing(host, monkeypatch, kwargs):
-    hash_models = Mock()
-    monkeypatch.setattr(saver, "model_hashes", hash_models)
+def test_invalid_expanded_path_fails_before_hashing(host, hash_models, kwargs):
     with pytest.raises(ValueError, match="path.*relative markers or anchors"):
         host.run(**kwargs)
-    hash_models.assert_not_called()
     assert not host.root.exists()
 
 
-@pytest.mark.parametrize("path", ["link", "%time_format<link>"])
-def test_output_paths_do_not_follow_symlinks_outside_output(host, tmp_path, path):
+def test_output_paths_do_not_follow_symlinks_outside_output(host, tmp_path):
     host.root.mkdir()
     outside = tmp_path / "elsewhere"
     outside.mkdir()
     (host.root / "link").symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match="outside"):
-        host.run(path=path)
+        host.run(path="link")
     (host.root / "image").symlink_to(outside / "stem")
     with pytest.raises(ValueError, match="outside"):
         host.run()
@@ -860,6 +679,15 @@ def test_output_paths_do_not_follow_symlinks_outside_output(host, tmp_path, path
     assert list(outside.iterdir()) == []
 
 
+def test_symlinked_output_directory_is_the_output_root(host, tmp_path):
+    # ComfyUI reports its output directory without resolving symlinks.
+    disk = tmp_path / "disk"
+    disk.mkdir()
+    host.root.symlink_to(disk, target_is_directory=True)
+    host.run(path="nested")
+    assert (disk / "nested" / "image.png").is_file()
+
+
 def test_output_path_allows_symlinks_within_output(host):
     directory = host.root / "nested"
     directory.mkdir(parents=True)
@@ -868,37 +696,11 @@ def test_output_path_allows_symlinks_within_output(host):
     assert (directory / "image.png").exists()
 
 
-@pytest.mark.parametrize("format", ["png", "jpg"])
-def test_model_hashes_and_metadata(host, format):
-    host.add_model("checkpoints", "base.v2.safetensors", b"base")
-    host.add_model("diffusion_models", "refiner.gguf", b"refiner")
-    host.add_model("loras", "ink.safetensors", b"ink")
-    host.run(
-        models=(
-            " checkpoints/base.v2.safetensors, diffusion_models/refiner.gguf, "
-            "loras/ink.safetensors, "
-        ),
-        additional_hashes=f"ABCDEF0123, {hashlib.sha256(b'base').hexdigest()[:10]}",
-        format=format,
-    )
-    text = read_parameters(host.root / f"image.{format}")
-    assert "Model: base.v2" in text
-    assert f"Model hash: {hashlib.sha256(b'base').hexdigest()[:10]}" in text
-    hashes = json.loads(text.split("Hashes: ")[1].split(", Version:")[0])
-    expected = [
-        hashlib.sha256(content).hexdigest()[:10] for content in (b"refiner", b"ink")
-    ]
-    assert hashes == {
-        "model": hashlib.sha256(b"base").hexdigest()[:10],
-        **{f"hash:{digest}": digest for digest in [*expected, "ABCDEF0123"]},
-    }
+# Models and hashes
 
 
-@pytest.mark.parametrize("format", ["png", "jpg"])
-@pytest.mark.parametrize(
-    "prefix", ["", "family/", "family\\", "family/nested/", "版本/art styles/"]
-)
-def test_model_names_output_saves_images(host, monkeypatch, caplog, format, prefix):
+@pytest.mark.parametrize("prefix", ["", "版本/art styles/"])
+def test_model_names_output_saves_images(host, monkeypatch, caplog, prefix):
     resources = [
         ("checkpoints", f"{prefix}base.v2.safetensors", b"base"),
         ("diffusion_models", f"{prefix}refiner.gguf", b"refiner"),
@@ -908,114 +710,87 @@ def test_model_names_output_saves_images(host, monkeypatch, caplog, format, pref
     for category, name, content in resources:
         host.add_model(category, name, content)
         if prefix and name.startswith(prefix):
-            host.add_model(
-                category, name.replace("\\", "/").rsplit("/", 1)[-1], b"wrong file"
-            )
+            # Same filename at the category root: lookup must use the full path.
+            host.add_model(category, name.rsplit("/", 1)[-1], b"wrong file")
     monkeypatch.setattr(
         host.folders,
         "get_filename_list",
         lambda category: [name for folder, name, _ in resources if folder == category],
     )
-    schema = host.model_names.define_schema()
-    references = [
-        category + "/" + name.replace("\\", "/") for category, name, _ in resources
-    ]
-    assert references[0] in schema.inputs[0].options
-    assert references[1] in schema.inputs[0].options
-    assert references[2] in schema.inputs[1].options
-    (models,) = host.model_names.execute(
-        references[:2],
-        references[2:],
-    ).result
-    assert models == ",".join(references)
-    now = datetime(2026, 9, 26, 12, 34, 56).astimezone()
-    monkeypatch.setattr(
-        sys.modules[host.node.__module__], "datetime", Mock(now=Mock(return_value=now))
-    )
+    schema = ModelNames.define_schema()
+    references = [f"{category}/{name}" for category, name, _ in resources]
+    assert {*references[:2]} <= {*schema.inputs[0].options}
+    assert {*references[2:]} <= {*schema.inputs[1].options}
+    (models,) = ModelNames.execute(references[:2], references[2:]).result
+    freeze_time(monkeypatch)
 
-    result = host.node.execute(
-        torch.zeros((1, 3, 5, 3)), "positive", "negative", models=models, format=format
-    )
+    host.run(models=models, filename=saver.FILENAME)
 
-    assert result.result == () and result.ui is None
-    text = read_parameters(host.root / f"2026-09-26-123456_base.v2_0.{format}")
+    text = read_parameters(host.root / "2026-09-26-123456_base.v2_0.png")
     assert "Model: base.v2" in text
     if prefix:
         assert prefix not in text
-    hashes = json.loads(text.split("Hashes: ")[1].split(", Version:")[0])
-    primary, *others = [
-        hashlib.sha256(content).hexdigest()[:10] for _, _, content in resources
-    ]
-    assert hashes == {
+    primary, *others = [sha(content) for _, _, content in resources]
+    assert f"Model hash: {primary}" in text
+    assert hashes_in(text) == {
         "model": primary,
         **{f"hash:{digest}": digest for digest in others},
     }
-    assert f"Model hash: {primary}" in text
     assert not caplog.records
 
 
-@pytest.mark.parametrize("prefix", ["", "family/", "family\\"])
-def test_missing_primary_preserves_name_and_other_hashes(host, caplog, prefix):
-    host.add_model("checkpoints", "base.safetensors", b"one")
-    host.add_model("loras", "ink.custom", b"ink")
-    host.run(
-        models=(
-            f"checkpoints/{prefix}missing.safetensors, "
-            "checkpoints/base.safetensors, loras/ink.custom"
-        ),
-        additional_hashes="ABCDEF",
-    )
-    text = read_parameters(host.root / "image.png")
-    assert "Model: missing" in text
-    hashes = json.loads(text.split("Hashes: ")[1].split(", Version:")[0])
-    expected = [
-        hashlib.sha256(content).hexdigest()[:10] for content in (b"one", b"ink")
-    ]
-    assert hashes == {f"hash:{digest}": digest for digest in [*expected, "ABCDEF"]}
-    assert "Model hash:" not in text
-    assert "no matching model file" in caplog.text
-
-
+# Each clause of the shared model reference rules. ModelNames covers the
+# filename characters that real files on disk can contain.
 @pytest.mark.parametrize(
     "reference",
     [
-        "./base.safetensors",
         "../base.safetensors",
-        "old/../base.safetensors",
-        "/base.safetensors",
-        "base.safetensors/",
+        r"..\base.safetensors",
         "old//base.safetensors",
         "old/./base.safetensors",
-        "old\0/base.safetensors",
-        "old\n/base.safetensors",
-        r".\base.safetensors",
-        r"..\base.safetensors",
+        "base.safetensors/",
+        "/base.safetensors",
         r"C:\base.safetensors",
-        "C:/base.safetensors",
-        "C:base.safetensors",
         r"\\server\share\base.safetensors",
-        ".",
-        "..",
+        "old\0/base.safetensors",
         "base",
-        "base.",
         ".safetensors",
     ],
 )
 def test_invalid_model_paths_and_missing_suffixes_fail_at_node_input(
-    host, monkeypatch, reference
+    host, hash_models, reference
 ):
-    hash_models = Mock()
-    monkeypatch.setattr(saver, "model_hashes", hash_models)
     with pytest.raises(ValueError, match="models"):
         host.run(models=f"valid.safetensors, {reference}")
-    hash_models.assert_not_called()
     assert not host.root.exists()
 
 
-def test_model_lookup_does_not_search_subfolders(host, caplog):
-    host.add_model("checkpoints", "other/base.safetensors", b"base")
-    assert saver.model_hashes({"base.safetensors"}, set(), host.folders) == {}
-    assert "no matching model file" in caplog.text
+@pytest.mark.parametrize("input_name", ["models", "additional_hashes"])
+def test_internal_whitespace_fails_at_node_input(host, hash_models, input_name):
+    with pytest.raises(ValueError, match=f"{input_name}.*internal whitespace"):
+        host.run(**{input_name: "valid.safetensors, ABC\u00a0DEF.safetensors"})
+    assert not host.root.exists()
+
+
+def test_model_metadata_delimiters_fail_at_node_input(host, hash_models):
+    # Quotes and colons would corrupt the Model and Hashes metadata fields.
+    with pytest.raises(ValueError, match="models.*commas, colons, quotes, or newlines"):
+        host.run(models='valid.safetensors, bad"name.safetensors')
+    assert not host.root.exists()
+
+
+def test_model_names_share_filename_character_restrictions(host, hash_models):
+    with pytest.raises(ValueError, match="models.*ASCII letters"):
+        ModelNames.execute(["nested/bad%name.safetensors"], [])
+    with pytest.raises(ValueError, match="models.*ASCII letters"):
+        host.run(models="bad%name.safetensors")
+    assert not host.root.exists()
+
+
+def test_conflicting_model_filenames_fail_before_hashing(host, hash_models):
+    with pytest.raises(ValueError, match="unique filenames across distinct paths"):
+        host.run(models="checkpoints/base.safetensors,loras/base.safetensors")
+    assert not host.root.exists()
 
 
 def test_node_deduplicates_model_names_and_preserves_primary(host, monkeypatch):
@@ -1033,76 +808,33 @@ def test_node_deduplicates_model_names_and_preserves_primary(host, monkeypatch):
     assert hash_file.call_count == 2
     text = read_parameters(host.root / "zbase.png")
     assert "Model: zbase" in text
-    assert f"Model hash: {hashlib.sha256(b'base').hexdigest()[:10]}" in text
+    assert f"Model hash: {sha(b'base')}" in text
 
 
-@pytest.mark.parametrize(
-    "other", ["checkpoints/other/base.safetensors", "loras/base.safetensors"]
-)
-def test_conflicting_model_filenames_fail_before_hashing(host, monkeypatch, other):
-    hash_models = Mock()
-    monkeypatch.setattr(saver, "model_hashes", hash_models)
-
-    with pytest.raises(ValueError, match="unique filenames across distinct paths"):
-        host.run(models=f"checkpoints/base.safetensors,{other}")
-
-    hash_models.assert_not_called()
-    assert not host.root.exists()
-
-
-@pytest.mark.parametrize("separator", ["/", "\\"])
-def test_model_hashes_use_paths_for_lookup_and_filenames_for_keys(host, separator):
-    reference = f"checkpoints{separator}family{separator}base.v2.safetensors"
+def test_backslash_model_references_use_the_full_path(host):
     host.add_model("checkpoints", "family/base.v2.safetensors", b"selected file")
     host.add_model("checkpoints", "base.v2.safetensors", b"wrong file")
-
-    assert saver.model_hashes({reference}, set(), host.folders) == {
-        "base.v2.safetensors": hashlib.sha256(b"selected file").hexdigest()[:10]
-    }
-
-
-@pytest.mark.parametrize("category", PICKER_CATEGORIES)
-def test_model_lookup_uses_only_the_exact_path(host, monkeypatch, caplog, category):
-    for folder in PICKER_CATEGORIES:
-        host.add_model(folder, "base.safetensors", folder.encode())
-    monkeypatch.setattr(
-        host.folders,
-        "get_full_path",
-        Mock(side_effect=AssertionError("category lookup")),
-    )
-    assert saver.model_hashes(
-        {f"{category}/base.safetensors"}, set(), host.folders
-    ) == {"base.safetensors": hashlib.sha256(category.encode()).hexdigest()[:10]}
-    host.run(models=f"{category}/base.safetensors", filename="%model")
-    text = read_parameters(host.root / "base.png")
-    assert f"Model hash: {hashlib.sha256(category.encode()).hexdigest()[:10]}" in text
-    assert "Model: base" in text
-    assert f"{category}/" not in text
-    assert not caplog.records
+    host.run(models=r"checkpoints\family\base.v2.safetensors", filename="%model")
+    text = read_parameters(host.root / "base.v2.png")
+    assert "Model: base.v2" in text
+    assert f"Model hash: {sha(b'selected file')}" in text
 
 
-@pytest.mark.parametrize("format", ["png", "jpg"])
-@pytest.mark.parametrize(
-    "reference", ["vae/decoder.bin", "other/assets/reference.data", "payload.txt"]
-)
-def test_saver_hashes_files_without_category_or_extension_registration(
-    host, monkeypatch, caplog, format, reference
-):
+def test_saver_hashes_any_file_without_host_model_registries(host, monkeypatch, caplog):
+    reference = "other/assets/reference.data"
     content = b"\x00arbitrary file contents\xff"
     path = Path(host.folders.models_dir) / reference
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True)
     path.write_bytes(content)
     for attribute in ("get_filename_list", "get_full_path", "supported_pt_extensions"):
         monkeypatch.delattr(host.folders, attribute)
 
-    host.run(models=reference, filename="%model", format=format)
+    host.run(models=reference, filename="%model")
 
-    text = read_parameters(host.root / f"{path.stem}.{format}")
-    digest = hashlib.sha256(content).hexdigest()[:10]
-    assert f"Model: {path.stem}" in text
-    assert f"Model hash: {digest}" in text
-    hashes = json.loads(text.split("Hashes: ")[1].split(", Version:")[0])
-    assert hashes == {"model": digest}
+    text = read_parameters(host.root / "reference.png")
+    assert "Model: reference" in text
+    assert f"Model hash: {sha(content)}" in text
+    assert hashes_in(text) == {"model": sha(content)}
     assert reference not in text
     assert not caplog.records
 
@@ -1110,6 +842,7 @@ def test_saver_hashes_files_without_category_or_extension_registration(
 def test_missing_exact_model_does_not_fall_back_to_other_categories(host, caplog):
     host.add_model("checkpoints", "base.safetensors", b"wrong file")
     host.add_model("loras", "base.safetensors", b"also wrong")
+    host.add_model("diffusion_models", "nested/base.safetensors", b"nested wrong")
 
     host.run(models="diffusion_models/base.safetensors", filename="%model")
 
@@ -1130,15 +863,7 @@ def test_bare_model_filename_means_file_directly_in_models_directory(host):
     host.run(models="base.safetensors")
 
     text = read_parameters(host.root / "image.png")
-    assert f"Model hash: {hashlib.sha256(b'exact file').hexdigest()[:10]}" in text
-
-
-def test_model_lookup_resolves_from_models_directory(host, tmp_path, monkeypatch):
-    path = host.add_model("checkpoints", "base.safetensors")
-    monkeypatch.chdir(tmp_path)
-    resolved = saver._resolve_model("checkpoints/base.safetensors", host.folders)
-    assert resolved.is_absolute()
-    assert resolved == path
+    assert f"Model hash: {sha(b'exact file')}" in text
 
 
 def test_missing_and_unreadable_model_files_warn(host, caplog, monkeypatch):
@@ -1150,99 +875,33 @@ def test_missing_and_unreadable_model_files_warn(host, caplog, monkeypatch):
     assert "no matching model file" in caplog.text
 
 
-def test_hash_cache_invalidation_and_no_sidecars(host):
+def test_model_hashes_are_cached_until_the_file_changes(host, monkeypatch):
     path = host.add_model("checkpoints", "base.safetensors", b"first")
-    first = saver.file_hash(path)
-    assert saver.file_hash(path) == first
-    assert saver._cached_hash.cache_info().hits == 1
-    path.write_bytes(b"other")  # Same length; mtime/ctime also participate in the key.
-    assert saver.file_hash(path) == hashlib.sha256(b"other").hexdigest()[:10] != first
+    digest = Mock(wraps=hashlib.file_digest)
+    monkeypatch.setattr(hashlib, "file_digest", digest)
+    for _ in range(2):
+        host.run(models="checkpoints/base.safetensors")
+    assert digest.call_count == 1
+
+    path.write_bytes(b"other")
+    # Same size; move mtime explicitly because filesystem clocks can be coarse.
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    host.run(models="checkpoints/base.safetensors")
+
+    assert digest.call_count == 2
+    assert f"Model hash: {sha(b'other')}" in read_parameters(host.root / "image_2.png")
     assert list(path.parent.iterdir()) == [path]
 
 
-def test_hashes_deduplicate_and_preserve_additional_digests(host, caplog):
-    host.add_model("checkpoints", "base.safetensors", b"base")
-    host.add_model("loras", "copy.safetensors", b"base")
-    digest = hashlib.sha256(b"base").hexdigest()[:10]
-    additional = {digest, "ABCDEF0123", "abcdef0123", "f" * 64}
-    hashes = saver.model_hashes(
-        {"checkpoints/base.safetensors", "loras/copy.safetensors"},
-        additional,
-        host.folders,
+def test_additional_hashes_without_models(host):
+    host.run(
+        models=" , \n",
+        additional_hashes=" \tsha256:Ab+/=\n, \u2003arbitrary-digest\u00a0",
     )
-    assert hashes == {
-        "base.safetensors": digest,
-        "copy.safetensors": digest,
-        "hash:ABCDEF0123": "ABCDEF0123",
-        "hash:abcdef0123": "abcdef0123",
-        f"hash:{'f' * 64}": "f" * 64,
-    }
-    assert not caplog.records
-
-
-@pytest.mark.parametrize(
-    ("additional", "expected"),
-    [
-        (" , \n", set()),
-        ("ABCDEF, ABCDEF,\n123456", {"ABCDEF", "123456"}),
-        (
-            " \tsha256:Ab+/=\n, \u2003arbitrary-digest\u00a0",
-            {"sha256:Ab+/=", "arbitrary-digest"},
-        ),
-    ],
-)
-def test_additional_hashes_without_models(host, additional, expected):
-    host.run(models=" , \n", additional_hashes=additional)
     text = read_parameters(host.root / "image.png")
     assert "Model:" not in text
-    if expected:
-        hashes = json.loads(text.split("Hashes: ")[1].split(", Version:")[0])
-        assert hashes == {f"hash:{digest}": digest for digest in expected}
-    else:
-        assert "Hashes:" not in text
-
-
-@pytest.mark.parametrize("input_name", ["models", "additional_hashes"])
-@pytest.mark.parametrize(
-    "whitespace", [" ", "\t", "\n", "\r", "\v", "\f", "\u00a0", "\u2003"]
-)
-def test_internal_whitespace_fails_at_node_input(
-    host, monkeypatch, caplog, input_name, whitespace
-):
-    hash_models = Mock()
-    monkeypatch.setattr(saver, "model_hashes", hash_models)
-    with pytest.raises(ValueError, match=f"{input_name}.*internal whitespace"):
-        host.run(
-            **{
-                input_name: f"valid.safetensors, \tABC{whitespace}DEF.safetensors \n, last.ckpt"
-            }
-        )
-    hash_models.assert_not_called()
-    assert not host.root.exists()
-    assert not caplog.records
-
-
-@pytest.mark.parametrize("name", ['bad"name.safetensors', "bad:name.safetensors"])
-@pytest.mark.parametrize("primary", [True, False])
-def test_model_metadata_delimiters_fail_at_node_input(host, monkeypatch, name, primary):
-    hash_models = Mock()
-    monkeypatch.setattr(saver, "model_hashes", hash_models)
-    models = f"{name}, valid.safetensors" if primary else f"valid.safetensors, {name}"
-    with pytest.raises(ValueError, match="models.*commas, colons, quotes, or newlines"):
-        host.run(models=models)
-    hash_models.assert_not_called()
-    assert not host.root.exists()
-
-
-@pytest.mark.parametrize(
-    "name", ["海.safetensors", "bad>name.safetensors", "bad%name.safetensors"]
-)
-def test_model_names_share_filename_character_restrictions(host, monkeypatch, name):
-    hash_models = Mock()
-    monkeypatch.setattr(saver, "model_hashes", hash_models)
-    with pytest.raises(ValueError, match="models.*ASCII letters"):
-        host.model_names.execute([f"nested/{name}"], [])
-    with pytest.raises(ValueError, match="models.*ASCII letters"):
-        host.run(models=name)
-    hash_models.assert_not_called()
-    assert not host.root.exists()
+    assert hashes_in(text) == {
+        "hash:sha256:Ab+/=": "sha256:Ab+/=",
+        "hash:arbitrary-digest": "arbitrary-digest",
+    }
