@@ -1,7 +1,6 @@
 name: Publish to Comfy registry
 
 # The mirror dispatches this workflow on main after a verified synchronization.
-# Use the tag input to select release code while retaining main's current checks.
 # Leave REGISTRY_PUBLISH_ENABLED unset/false until ready to publish.
 on:
   workflow_dispatch:
@@ -28,26 +27,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Check out publishing checks and all tags
-        uses: actions/checkout@v7
-        with:
-          path: workflow
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Compare candidate with the Comfy registry
-        id: candidate
-        env:
-          REQUESTED_TAG: ${{ inputs.tag }}
-        run: python3 workflow/.github/scripts/registry_publish.py --repo workflow --tag "$REQUESTED_TAG"
-      - name: Check out the selected release commit
-        if: steps.candidate.outputs.publish == 'true'
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ steps.candidate.outputs.commit }}
-          persist-credentials: false
       - name: Publish Custom Node
-        if: steps.candidate.outputs.publish == 'true'
-        uses: Comfy-Org/publish-node-action@main
+        uses: lany42/lany-actions-ci/actions/registry-publish@bb944f52f0849af08e8a6b12ae4d40825301ee94 # v1.0.0
         with:
-          skip_checkout: 'true'
-          personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
+          tag: ${{ inputs.tag }}
+          token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}

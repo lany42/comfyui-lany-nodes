@@ -17,110 +17,13 @@ jobs:
   mirror:
     if: ${{ github.repository == 'lany42/comfyui-lany-nodes' && vars.MIRROR_ENABLED == 'true' }}
     permissions:
-      actions: write
+      actions: write # only for dispatch-workflow
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    env:
-      CANONICAL_URL: https://git.colorized.life/comfyui-lany-nodes.git
-      MIRROR_READ_URL: https://github.com/lany42/comfyui-lany-nodes.git
-      MIRROR_WRITE_URL: https://github.com/lany42/comfyui-lany-nodes.git
-      GIT_TERMINAL_PROMPT: "0"
     steps:
-      - name: Fetch and check canonical history anonymously
-        id: prepare
-        shell: bash
-        run: |
-          set -euo pipefail
-          export LC_ALL=C
-          mirror_dir="$RUNNER_TEMP/canonical.git"
-          source_refs="$RUNNER_TEMP/canonical.refs"
-          target_refs="$RUNNER_TEMP/mirror.refs"
-
-          # A failed read must never be treated as an empty source repository.
-          git ls-remote --refs --heads --tags "$CANONICAL_URL" | sort > "$source_refs"
-          git ls-remote --refs --heads --tags "$MIRROR_READ_URL" | sort > "$target_refs"
-          if cmp -s "$source_refs" "$target_refs"; then
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
-            echo 'The mirror already matches the canonical branches and tags.'
-            exit 0
-          fi
-
-          git init --bare "$mirror_dir"
-          git -C "$mirror_dir" fetch --no-tags "$CANONICAL_URL" \
-            '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
-          git -C "$mirror_dir" show-ref --verify refs/heads/main
-
-          # Refuse to roll back main or erase commits made only on GitHub.
-          # Put the same history on origin before bootstrapping/enabling this job.
-          if ! git -C "$mirror_dir" merge-base --is-ancestor "$GITHUB_SHA" refs/heads/main; then
-            echo '::error::Canonical main must contain the GitHub workflow commit. Synchronize origin before retrying.'
-            exit 1
-          fi
-          git -C "$mirror_dir" cat-file -e refs/heads/main:.github/workflows/mirror.yml
-          git -C "$mirror_dir" for-each-ref --format='%(objectname)%09%(refname)' \
-            refs/heads/ refs/tags/ | sort > "$RUNNER_TEMP/fetched.refs"
-          if ! cmp -s "$source_refs" "$RUNNER_TEMP/fetched.refs"; then
-            echo '::error::Canonical references changed during the fetch. Retry without changing the mirror.'
-            exit 1
-          fi
-          echo 'changed=true' >> "$GITHUB_OUTPUT"
-
-      - name: Update GitHub branches and tags
-        if: steps.prepare.outputs.changed == 'true'
-        shell: bash
-        env:
-          REPO_MIRROR: ${{ secrets.REPO_MIRROR }}
-        run: |
-          set -euo pipefail
-          export LC_ALL=C
-          if [[ -z "$REPO_MIRROR" ]]; then
-            echo '::error::Set the REPO_MIRROR repository Actions secret before enabling mirroring.'
-            exit 1
-          fi
-          umask 077
-          credential_dir=$(mktemp -d "$RUNNER_TEMP/mirror-credential.XXXXXX")
-          trap 'rm -rf -- "$credential_dir"' EXIT
-
-          # Read the PAT from the step environment, never from a URL or file.
-          # Supply it only for this exact GitHub HTTPS repository.
-          cat > "$credential_dir/helper" <<'CREDENTIAL_HELPER'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          [[ "$1" == get ]] || exit 0
-          protocol=''
-          host=''
-          path=''
-          while IFS='=' read -r key value; do
-            case "$key" in
-              protocol) protocol="$value" ;;
-              host) host="$value" ;;
-              path) path="$value" ;;
-            esac
-          done
-          if [[ "$protocol" == https && "$host" == github.com && "$protocol://$host/$path" == "$MIRROR_WRITE_URL" ]]; then
-            printf 'username=x-access-token\npassword=%s\n' "$REPO_MIRROR"
-          fi
-          CREDENTIAL_HELPER
-          chmod 700 "$credential_dir/helper"
-          export GIT_ASKPASS=/bin/false
-          printf -v credential_helper '%q' "$credential_dir/helper"
-
-          # Only branch/tag refs: preserve GitHub's own internal references.
-          git -C "$RUNNER_TEMP/canonical.git" \
-            -c credential.helper= \
-            -c "credential.helper=$credential_helper" \
-            -c credential.useHttpPath=true \
-            -c http.followRedirects=false \
-            push --atomic --prune "$MIRROR_WRITE_URL" \
-            '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
-          unset REPO_MIRROR
-          git ls-remote --refs --heads --tags "$MIRROR_READ_URL" | sort > "$RUNNER_TEMP/verified.refs"
-          cmp "$RUNNER_TEMP/canonical.refs" "$RUNNER_TEMP/verified.refs"
-          echo 'Verified identical canonical and mirrored branch/tag objects.'
-
-      - name: Dispatch registry publishing after synchronization
-        if: steps.prepare.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: gh workflow run publish.yml --repo "$GH_REPO" --ref main
+      - name: Mirror canonical repository
+        uses: lany42/lany-actions-ci/actions/mirror@bb944f52f0849af08e8a6b12ae4d40825301ee94 # v1.0.0
+        with:
+          canonical-url: https://git.colorized.life/comfyui-lany-nodes.git
+          token: ${{ secrets.REPO_MIRROR }}
+          dispatch-workflow: publish.yml
