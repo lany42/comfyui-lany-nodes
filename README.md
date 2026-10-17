@@ -22,6 +22,7 @@ All nodes are available in the **Lany Nodes** category.
 | Context | `LanyNodes_Context` | Optional `base_ctx` and optional context fields listed below | `CONTEXT`, followed by each context field in uppercase, in the order listed below |
 | Seed | `LanyNodes_Seed` | `seed`; buttons: `randomize`, `new seed`, `use last seed` | `SEED` |
 | ImageComparer | `LanyNodes_ImageComparer` | `image_a`, `image_b` (nonempty image batches of equal length); `Slider` / `Click` modes, previous / next pair, right-click PNG download | No output sockets; browser image comparison |
+| FastGroupsMuter | `LanyNodes_FastGroupsMuter` | One toggle per group in its graph, sorted by title (`2.` before `10.`) and refreshed about once a second; on runs the group's nodes, off mutes them | No sockets; frontend only, never sent to the backend |
 
 Context fields, in order: `model`, `clip`, `vae`, `positive`, `negative`,
 `latent`, `images`, `seed`, `width`, `height`, `prompt_pos`, `prompt_neg`,
@@ -34,6 +35,7 @@ Copyright © 2026 Lany Atwood <lany@colorized.life>. Licensed under
 
 Context and Seed are fresh implementations for ComfyUI's V3 node API, inspired by
 rgthree's Context Big and Seed nodes in [rgthree-comfy](https://github.com/rgthree/rgthree-comfy).
+FastGroupsMuter is a fresh frontend implementation inspired by rgthree's Fast Groups Muter.
 No upstream source code is incorporated; see [COPYRIGHT](COPYRIGHT) for attribution.
 
 ImageSaverMini is a fresh V3 implementation inspired by

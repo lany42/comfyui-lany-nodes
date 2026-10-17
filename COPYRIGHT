@@ -8,6 +8,8 @@ Upstream inspiration:
 Context and Seed are fresh implementations for ComfyUI's V3 node API,
 inspired by the Context Big and Seed nodes in rgthree-comfy by
 Regis Gaughan, III (rgthree).
+FastGroupsMuter is a fresh frontend implementation inspired by the
+Fast Groups Muter node in rgthree-comfy.
 No upstream source code is incorporated.
 
 Upstream project: https://github.com/rgthree/rgthree-comfy
